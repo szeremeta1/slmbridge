@@ -23,8 +23,8 @@ A multi-line answering soft-modem bridge for Asterisk over AudioSocket.
 > qualified to evaluate it. See [LICENSE](LICENSE) for the full legal
 > disclaimer of warranty and liability.
 
-`slmbridge` lets [`slmodemd`](https://www.smlink.com/) — Smart Link's Linux
-softmodem daemon — answer incoming calls delivered to
+`slmbridge` lets `slmodemd` — Smart Link's Linux softmodem daemon — answer
+incoming calls delivered to
 [Asterisk](https://www.asterisk.org/) as
 [AudioSocket](https://github.com/CyCoreSystems/audiosocket) streams, and run
 several lines of it at once on a single machine.
