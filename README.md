@@ -2,6 +2,27 @@
 
 A multi-line answering soft-modem bridge for Asterisk over AudioSocket.
 
+> **AI-generated code — use at your own risk.** The entirety of `slmbridge`
+> (including `slmbridge.c`, `slmbridge_rstest.c`, and this documentation) was
+> written by a generative AI system, not audited line-by-line by a human
+> engineer with domain expertise in telephony, DSP, or C systems programming
+> beyond the review that produced this disclaimer. It has not undergone a
+> professional security audit and has not been tested against adversarial or
+> malformed input.
+>
+> This code interacts with subprocess execution, raw sockets, and file
+> descriptors passed across process boundaries — categories of code where
+> bugs can have consequences beyond a crash (resource exhaustion, unexpected
+> subprocess behavior, mishandling of untrusted network input). It is
+> provided strictly "as is," with no warranty of correctness, safety,
+> security, or fitness for any purpose. **By using, deploying, modifying, or
+> distributing this software, you assume all risk of any flaws, defects,
+> vulnerabilities, data loss, service disruption, or other harm that may
+> result — direct or indirect.** Do not deploy this in a production or
+> security-sensitive environment without independent review by someone
+> qualified to evaluate it. See [LICENSE](LICENSE) for the full legal
+> disclaimer of warranty and liability.
+
 `slmbridge` lets [`slmodemd`](https://www.smlink.com/) — Smart Link's Linux
 softmodem daemon — answer incoming calls delivered to
 [Asterisk](https://www.asterisk.org/) as
