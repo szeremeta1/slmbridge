@@ -113,7 +113,7 @@ gap between them, and none of this works without their prior art:
 | [AudioSocket](https://github.com/CyCoreSystems/audiosocket) | Seán C McCord, CyCore Systems | GPL-2.0 |
 | Asterisk | Sangoma / Digium and the Asterisk project | GPL-2.0 |
 
-`slmbridge` itself was extracted from LiteNet Connectivity Solutions' dial-up
+`slmbridge` itself was extracted from [LiteNet Connectivity Solutions'](https://dialup.litenet.tel) dial-up
 ISP stack, where it's what lets a real 14.4k-class modem call in and get
 answered by software instead of hardware.
 
