@@ -177,75 +177,228 @@ static int read_exact(int fd, void *buf, size_t n)
  * Set LITENET_DSP_RATE=8000 to bypass every line of this and get the old
  * straight-through path back, which is the rollback.
  */
-/* 32, not 12, and the number was measured rather than chosen.
+/* THE TEST STOPPED AT 3400 Hz AND THE FILTER STOPPED WORKING AT 3500.
  *
- * The corner is right at either tap count -- fc = 1/(2*max(L,M)) of the
- * intermediate rate, i.e. 4 kHz, which is all the 8 kHz side can carry. What
- * 12 taps got wrong was the TRANSITION: a 12-tap-per-phase Blackman sinc rolls
- * off so gradually that 3000 Hz was already -1.3 dB and 3400 Hz was -3.6 dB.
- * V.32bis puts symbols up there and V.34's higher symbol rates live on it, so
- * that is signal the demodulator needs, quietly attenuated by the thing that
- * was supposed to be transparent.
+ * The 32-tap Blackman design this replaces was measured flat "to within 0.1 dB"
+ * across 300-3400 Hz, and it is. That band was the right target for V.32bis,
+ * whose symbols stop at 3000 Hz. It is the wrong target for V.34: the 3429-baud
+ * symbol rate that carries 31200 and 33600 sits on a 1959 Hz carrier with 12.5%
+ * excess bandwidth, so its signal runs to 1959 + 3429*1.125/2 = 3888 Hz.
+ * Measured round trip on the old design:
  *
- * At 32 the same band is flat to within 0.1 dB. The cost is 32 multiplies per
- * output sample, about 307k/s per direction per line -- against a DSP already
- * measured at 0.8 core-% and a relay at 7.3, it does not register. */
-#define RS_TAPS_PER_PHASE 32
+ *     3400 Hz  -0.11 dB      3674 Hz  -1.85 dB      3888 Hz  -7.05 dB
+ *
+ * That is the top of the fastest V.34 constellation being quietly buried by the
+ * component whose entire job is to be transparent -- the same defect the 12-tap
+ * version had, moved up a kilohertz and left there because the test only ever
+ * asserted to 3400. slmbridge_rstest.c now asserts to 3900 for that reason.
+ *
+ * WHY THIS COSTS TAPS AND CANNOT BE HAD BY MOVING THE CUTOFF
+ *
+ * The obvious cheap fix is to slide fc up from 4000 Hz and buy the passband
+ * back for free, since the stopband was 75-108 dB down and nothing in a 35 dB
+ * SNR telephone channel needs that. It was tried, it measures beautifully in a
+ * magnitude plot, and it is WRONG in the up direction -- caught only because
+ * the rewritten test injects a tone and looks for its image:
+ *
+ *     up-resampling 8000 -> 9600 with fc=4250 gave +1.41 dB at 3800 Hz
+ *
+ * Gain, from a lowpass. Reconstructing a 9600 Hz signal from 8000 Hz samples,
+ * every component above 4000 Hz is by definition an image and not signal: input
+ * at 3800 Hz mirrors to 4200 Hz, and an fc of 4250 passed it at full amplitude
+ * straight into the DSP. So for the UP direction the corner is pinned at 4000 Hz
+ * by physics, and the only lever on the transition is length. docs/MODEM-RATE.md
+ * queued "the computed 64-tap resampler" and the instinct was right; the number
+ * was low, because 64 taps at fc=4000 is still -0.92 dB (up) and -1.39 dB (down)
+ * at 3888 Hz.
+ *
+ * The DOWN direction could legitimately relax -- decimating 9600 -> 8000 folds
+ * about 4000 Hz, but the only thing between 4000 and 4800 Hz is the DSP's own
+ * out-of-band emission, and real image energy does not begin until 9600-3900 =
+ * 5700 Hz. Measured with LITENET_RS_DUMP on a replayed call, the blob emits
+ * -86 dBc between 4000 and 4400 Hz, so relaxing it would in fact have been
+ * safe. It is kept at 4000 Hz anyway, for two reasons: the taps it would save
+ * are worth less than not owing the next reader an assumption, and that -86 dBc
+ * was captured during the V.8/INFO0 phases -- the replayed call never reached
+ * the 3429-baud data phase, so it does not characterise emission when the
+ * modulator is actually running at the top symbol rate.
+ *
+ * WHAT IT COSTS, AND WHY THAT IS AFFORDABLE HERE
+ *
+ * 96 taps/phase up and 112 down, Kaiser beta 5.0, fc 4000 Hz both ways:
+ *
+ *              ripple 300-3888   @3674     @3888    alias rejection
+ *   UP   old       3.57 dB      -0.72 dB  -3.57 dB    -75.3 dB (>=4800)
+ *   UP   new       0.06 dB      -0.00 dB  -0.16 dB    -69.9 dB (>=4800)
+ *   DOWN old       3.92 dB      -1.14 dB  -3.92 dB    -83.1 dB (>=5700)
+ *   DOWN new       0.08 dB      +0.00 dB  -0.20 dB    -74.5 dB (>=5700)
+ *
+ * Round trip at 3888 Hz goes from -7.05 dB to -0.36 dB. Stopband gives up a few
+ * dB it had no use for.
+ *
+ * It is NOT free, and an earlier draft of this comment claimed it was close to
+ * a wash because the old inner loop's per-input-sample memmove is gone (the
+ * history is now double-written, so the filter window is always contiguous and
+ * nothing is moved). Benchmarked on the box that runs it -- Xeon E5-2697A v4,
+ * both directions, one line's worth of audio -- that was wrong:
+ *
+ *     legacy 32/32 tap   0.065% of one core per line
+ *     this   96/112 tap  0.187% of one core per line
+ *
+ * 2.9x, not a wash. It is affordable rather than cheap: 6.0% of one core if all
+ * 32 lines ever run it, against the 0.8 core-% the DSP costs per line and the
+ * 7.3 the relay costs. Today exactly one line runs it. The memmove removal is
+ * real and is why 3.5x the taps costs 2.9x the time instead of more.
+ *
+ * This does NOT claim a rate improvement. It removes a known distortion from
+ * the band V.34's rate decision is made on; whether the far modem then picks a
+ * higher symbol rate is a question for a real call, not for this file.
+ *
+ * LITENET_RS_PROFILE=legacy restores the old 32-tap fc=4000 Blackman pair
+ * exactly, which is the rollback. The new pair is the default because the only
+ * caller of any of this is the 9600 experimental path -- the 32 production lines
+ * run FAST_DSP_RATE=8000, where `resampling` is false and not one line of this
+ * resampler executes.
+ *
+ * LITENET_RS_DUMP=<prefix> writes the raw pre-resample streams to
+ * <prefix>-as8000.raw and <prefix>-dsp9600.raw (s16le, no header). Off unless
+ * set. Diagnostic only: it does a blocking write per frame and has no place on
+ * a live line. */
+#define RS_TAPS_MAX       128
 #define RS_MAX_L          6
-#define RS_MAX_HIST       RS_TAPS_PER_PHASE
 
 typedef struct {
     int   L, M;                                  /* interpolate L, decimate M */
+    int   taps;                                  /* taps per polyphase branch */
     int   phase;                                 /* virtual position, [0,L) */
-    float h[RS_TAPS_PER_PHASE * RS_MAX_L];       /* prototype, h[k*L + p] */
-    float hist[RS_MAX_HIST];                     /* newest at [n-1] */
+    float h[RS_TAPS_MAX * RS_MAX_L];             /* prototype, h[k*L + p] */
+    float hist[2 * RS_TAPS_MAX];                 /* double-written ring */
+    int   hpos;                                  /* next slot to overwrite */
 } resamp_t;
 
-/* Windowed-sinc prototype at the INTERMEDIATE rate (in_rate * L).
- *
- * The corner has to be below both Nyquists, so fc = 1/(2*max(L,M)) in units of
- * the intermediate rate. For 8000<->9600 that is 1/12 either way -- 4 kHz --
- * because max(6,5) and max(5,6) are both 6. Scaled so the whole filter sums to
- * L, which makes each polyphase branch sum to ~1 and keeps DC gain at unity. */
-static void rs_init(resamp_t *r, int L, int M)
+/* Modified Bessel I0, series form. Converges in well under 60 terms for the
+   beta range a window uses; the loop breaks on relative epsilon anyway. */
+static double rs_i0(double x)
 {
-    r->L = L; r->M = M; r->phase = 0;
-    memset(r->hist, 0, sizeof r->hist);
+    double s = 1.0, t = 1.0;
+    for (int k = 1; k < 60; k++) {
+        double q = x / (2.0 * k);
+        t *= q * q;
+        s += t;
+        if (t < 1e-16 * s) break;
+    }
+    return s;
+}
 
-    const int n = RS_TAPS_PER_PHASE * L;
-    const double fc = 0.5 / (double)(L > M ? L : M);
-    const double mid = (n - 1) / 2.0;
+/* Windowed-sinc prototype at the intermediate rate (in_rate * L = 48000 for
+   both directions here). fc_hz is the -6 dB corner in real Hz; beta < 0 means
+   Blackman, which is what `legacy` uses. Scaled so the whole filter sums to L,
+   which makes each polyphase branch sum to ~1 and keeps DC gain at unity. */
+static void rs_init(resamp_t *r, int L, int M, int taps, double fc_hz,
+                    double beta)
+{
+    if (taps < 4) taps = 4;
+    if (taps > RS_TAPS_MAX) taps = RS_TAPS_MAX;
+    r->L = L; r->M = M; r->taps = taps; r->phase = 0; r->hpos = 0;
+    memset(r->hist, 0, sizeof r->hist);
+    memset(r->h, 0, sizeof r->h);
+
+    const double inter = 8000.0 * 6.0;           /* == 9600 * 5 */
+    const int    n     = taps * L;
+    const double fc    = fc_hz / inter;
+    const double mid   = (n - 1) / 2.0;
+    const double i0b   = (beta >= 0.0) ? rs_i0(beta) : 0.0;
     double sum = 0.0;
     for (int i = 0; i < n; i++) {
         double x = i - mid;
         double sinc = (x == 0.0) ? 2.0 * fc
                                  : sin(2.0 * M_PI * fc * x) / (M_PI * x);
-        /* Blackman: the stopband has to hold down aliases of a signal the
-           demodulator is about to make bit decisions on. */
-        double w = 0.42 - 0.5 * cos(2.0 * M_PI * i / (n - 1))
-                        + 0.08 * cos(4.0 * M_PI * i / (n - 1));
+        double w;
+        if (beta >= 0.0) {
+            double t = (2.0 * i) / (double)(n - 1) - 1.0;   /* -1 .. +1 */
+            double a = 1.0 - t * t;
+            if (a < 0.0) a = 0.0;
+            w = rs_i0(beta * sqrt(a)) / i0b;
+        } else {
+            w = 0.42 - 0.5 * cos(2.0 * M_PI * i / (n - 1))
+                     + 0.08 * cos(4.0 * M_PI * i / (n - 1));
+        }
         r->h[i] = (float)(sinc * w);
         sum += r->h[i];
     }
     for (int i = 0; i < n; i++) r->h[i] = (float)(r->h[i] * (double)L / sum);
 }
 
+/* Pick the pair of designs. See the block comment: UP and DOWN have different
+   stopband edges (4800 vs 5700 Hz), so they are not the same filter. */
+static void rs_init_pair(resamp_t *up, resamp_t *down, int dsp_rate)
+{
+    const int L_up = dsp_rate / 1600, M_up = 8000 / 1600;   /* 6, 5 */
+    const char *p = getenv("LITENET_RS_PROFILE");
+    if (p && !strcmp(p, "legacy")) {
+        rs_init(up,   L_up, M_up, 32, 4000.0, -1.0);
+        rs_init(down, M_up, L_up, 32, 4000.0, -1.0);
+        return;
+    }
+    /* LITENET_RS_PROFILE=narrow -- deliberately band-limit the RECEIVE path.
+     *
+     * The flat 4000 Hz design below is correct as signal processing and may be
+     * wrong as engineering. The caller's ATA transmits 10.7 dB down at 3750 Hz
+     * (line-probe measurement, docs/MODEM-RATE.md), so the top of the band
+     * carries very little of his signal and proportionally more noise.
+     * Reconstructing it flat hands that noise to the equalizer at full weight
+     * and lets the rate selector believe in bandwidth that is not really there
+     * -- which is consistent with the new filter buying 33,600 rate DECISIONS
+     * without buying reliability, and with the old 32-tap design (accidentally
+     * ~7 dB down at 3888 Hz) doing better on connect rate in a paired A/B.
+     *
+     * So: same modern filter quality, corner moved down to LITENET_RS_FC
+     * (default 3800 Hz). UP only -- the DOWN
+     * direction is our transmit, which is clean and should stay flat.
+     * This is a hypothesis under test, not a shipped default. */
+    if (p && !strcmp(p, "narrow")) {
+        const char *f = getenv("LITENET_RS_FC");
+        /* 3800, not 3400. At 96 taps a 3400 corner is a brick wall -- -59 dB
+         * by 3600 -- which would delete the top of the 3429-baud constellation
+         * rather than de-emphasise it. 3800 measures -6.0 dB at 3800 Hz, which
+         * is within a dB of what the legacy 32-tap design did at 3888 (-7 dB)
+         * and is the response the paired A/B suggests is actually helping.
+         * The point is to reproduce legacy's GENTLE ROLLOFF while keeping the
+         * modern stopband, not to invent a new brick wall. */
+        double fc = f ? atof(f) : 3800.0;
+        if (fc < 3000.0 || fc > 4000.0) fc = 3800.0;   /* refuse nonsense */
+        rs_init(up,   L_up, M_up,  96, fc,     5.0);
+        rs_init(down, M_up, L_up, 112, 4000.0, 5.0);
+        return;
+    }
+    rs_init(up,   L_up, M_up,  96, 4000.0, 5.0);
+    rs_init(down, M_up, L_up, 112, 4000.0, 5.0);
+}
+
 /* Push nin samples, emit as many outputs as become available. Returns the
-   count written. maxout must allow ceil(nin * L / M) + 1. */
+   count written. maxout must allow ceil(nin * L / M) + 1.
+ *
+ * The history is written twice, at hpos and hpos+taps, so the newest `taps`
+ * samples are always contiguous at hist[hpos+1 .. hpos+taps] and the inner
+ * loop needs no modulo and no per-sample memmove. The old version moved
+ * (taps-1) floats for every input sample; at 48 taps and 32 lines that alone
+ * would have been the dominant cost of the filter. */
 static int rs_process(resamp_t *r, const int16_t *in, int nin,
                       int16_t *out, int maxout)
 {
+    const int taps = r->taps;
     int nout = 0;
     for (int i = 0; i < nin; i++) {
-        memmove(r->hist, r->hist + 1, (RS_TAPS_PER_PHASE - 1) * sizeof(float));
-        r->hist[RS_TAPS_PER_PHASE - 1] = (float)in[i];
+        r->hist[r->hpos] = r->hist[r->hpos + taps] = (float)in[i];
+        if (++r->hpos >= taps) r->hpos = 0;
+        const float *w = r->hist + r->hpos;      /* w[0]=oldest .. w[taps-1]=newest */
 
         while (r->phase < r->L) {
             if (nout >= maxout) { r->phase += r->M; continue; }  /* never overrun caller */
+            const float *hp = r->h + r->phase;
             float acc = 0.0f;
-            for (int k = 0; k < RS_TAPS_PER_PHASE; k++)
-                acc += r->h[k * r->L + r->phase]
-                     * r->hist[RS_TAPS_PER_PHASE - 1 - k];
+            for (int k = 0; k < taps; k++)
+                acc += hp[k * r->L] * w[taps - 1 - k];
             int v = (int)(acc + (acc >= 0.0f ? 0.5f : -0.5f));
             if (v >  32767) v =  32767;
             if (v < -32768) v = -32768;
@@ -255,6 +408,29 @@ static int rs_process(resamp_t *r, const int16_t *in, int nin,
         r->phase -= r->L;
     }
     return nout;
+}
+
+/* Env-gated raw taps on both pre-resample streams, so the filter's inputs can
+   be looked at instead of reasoned about. LITENET_RS_DUMP=<prefix> writes
+   <prefix>-as8000.raw (what Asterisk hands us) and <prefix>-dsp9600.raw (what
+   the DSP hands us). s16le, no header. Opens on first use, never closes -- a
+   diagnostic run is one call long. Blocking writes: bench only. */
+static void rs_dump(int which, const int16_t *p, int n)
+{
+    static FILE *f[2];
+    static int tried;
+    if (!tried) {
+        tried = 1;
+        const char *pre = getenv("LITENET_RS_DUMP");
+        if (pre && *pre) {
+            char path[512];
+            snprintf(path, sizeof path, "%s-as8000.raw", pre);
+            f[0] = fopen(path, "wb");
+            snprintf(path, sizeof path, "%s-dsp9600.raw", pre);
+            f[1] = fopen(path, "wb");
+        }
+    }
+    if (f[which] && n > 0) fwrite(p, 2, (size_t)n, f[which]);
 }
 
 /* ---------------------------------------------------------------- helper --
@@ -380,9 +556,9 @@ static int helper_main(int pcm_fd, int as_fd)
     const int resampling = (dsp_rate != AS_RATE);
     static resamp_t up, down;
     if (resampling) {
-        /* 8000 -> 9600 is 6/5; 9600 -> 8000 is 5/6. */
-        rs_init(&up,   dsp_rate / 1600, AS_RATE / 1600);   /* 6, 5 */
-        rs_init(&down, AS_RATE / 1600, dsp_rate / 1600);   /* 5, 6 */
+        /* 8000 -> 9600 is 6/5 up; 9600 -> 8000 is 5/6 down. The two are not
+           the same filter -- see rs_init_pair and the block comment above it. */
+        rs_init_pair(&up, &down, dsp_rate);
     }
     static int16_t upbuf[8192], dnbuf[8192], insamp[4096];
     static uint8_t rawbuf[8192];
@@ -492,6 +668,7 @@ static int helper_main(int pcm_fd, int as_fd)
                         int nin = (int)(len / 2);
                         if (nin > (int)(sizeof insamp / 2)) nin = (int)(sizeof insamp / 2);
                         memcpy(insamp, payload, (size_t)nin * 2);
+                        rs_dump(0, insamp, nin);
                         int n = rs_process(&up, insamp, nin, upbuf,
                                            (int)(sizeof upbuf / 2));
                         ssize_t w = write(pcm_fd, upbuf, (size_t)n * 2); (void)w;
@@ -533,6 +710,7 @@ static int helper_main(int pcm_fd, int as_fd)
                             memcpy(ring + ring_len, insamp, n * 2);
                             ring_len += n;
                         } else {
+                            rs_dump(1, insamp, (int)nsamp);
                             int n = rs_process(&down, insamp, (int)nsamp, dnbuf,
                                                (int)(sizeof dnbuf / 2));
                             if ((size_t)n > out_room) n = (int)out_room;

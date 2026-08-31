@@ -47,10 +47,24 @@ It also fixes two problems that sit underneath that one:
 - **The 9,600 Hz / 8,000 Hz mismatch.** `slmodemd`'s DSP defaults to a
   9,600 Hz media rate; AudioSocket delivers 8,000 Hz. Left alone, that's a
   resampler sitting directly in the modem's signal path on every frame in
-  both directions. `slmbridge` runs a transparent 6:5 polyphase resampler at
-  the boundary instead (verified flat to within 1 dB across 300–3400 Hz —
-  see `slmbridge_rstest.c`), and the DSP itself can be built natively for
-  8,000 Hz if you have the coefficient tables to support it.
+  both directions. `slmbridge` runs a 6:5 polyphase resampler at the boundary
+  instead, and the DSP itself can be built natively for 8,000 Hz if you have
+  the coefficient tables to support it.
+
+  The self-test asserts flatness across **300–3,900 Hz**, not 300–3,400. That
+  detail is the whole point: an earlier version asserted 300–3,400 and passed
+  while the filter it was testing was 7 dB down at 3,888 Hz — the top of the
+  3,429-baud V.34 constellation. A test whose passband stops below the signal
+  band cannot see the defect it exists to catch. If a future rate needs more
+  than 3,900 Hz, move that number first and let it fail.
+
+  Three filter profiles are selectable at runtime with `LITENET_RS_PROFILE`:
+  the default 96/112-tap Kaiser pair (flat to 3,900), `legacy` (the original
+  32-tap Blackman pair, kept as an exact rollback), and `narrow`, which
+  deliberately band-limits the *receive* direction to `LITENET_RS_FC`
+  (default 3,800 Hz). `narrow` is an experiment, not a recommendation — it
+  intentionally fails the transparency check, which is why the self-test
+  reports it rather than asserting on it.
 - **Clock drift.** `slmodemd` has no clock of its own — it advances at
   whatever rate its device delivers audio. An implementation that reads at
   one clock and writes at an independent one lets the two drift apart, which
