@@ -99,6 +99,7 @@
  * written yet. 16 frames is a middle setting chosen to keep the link usable for
  * ICMP while that work is outstanding; it is not a solution. */
 #define RING_FRAMES_DEFAULT 16
+#define RING_FRAMES_RESAMPLED 64   /* the 9600 path: see ring_frames_for() */
 #define RING_FRAMES_MAX     64
 #define RING_SAMPLES  (FRAME_SAMPLES * RING_FRAMES_MAX)
 
@@ -119,10 +120,31 @@
  * in "Repeated info0" forever.
  *
  * LITENET_RING_FRAMES, default unchanged at 16. */
-static int ring_frames(void)
+/* The default is larger on the RESAMPLED path, and only there.
+ *
+ * When the ring fills, the helper reads slmodemd's output into a buffer called
+ * `waste` and discards it -- a hole punched in the signal we transmit, up to
+ * 4 KB at a time. Measured on the 9600 experimental line: overrun=4..19 on most
+ * calls at 16 frames, and exactly 0 at 64.
+ *
+ * ⚠️ Production overruns too (up to 13 seen at 8000) and is unaffected in
+ * practice -- V.32bis at 2400 baud rides through a lost 20 ms and LAPM
+ * retransmits, and those lines log ZERO hdlc frame errors across a day. So this
+ * is not a proven cause of anything; it is a latent defect that the slow path
+ * tolerates. V.34 at 3429 baud has far less margin, which is why the larger
+ * ring is given to the resampled path and production is left byte-identical in
+ * behaviour rather than "improved" on a hunch.
+ *
+ * Capacity is not latency: under LITENET_TX_CLOCK=rx the ring drains one frame
+ * per frame Asterisk delivers, so steady-state delay is LITENET_RX_PREFILL, not
+ * this number. Capacity only has to absorb a burst.
+ *
+ * LITENET_RING_FRAMES overrides both. */
+static int ring_frames_for(int dsp_rate)
 {
     const char *v = getenv("LITENET_RING_FRAMES");
-    int n = (v && *v) ? atoi(v) : RING_FRAMES_DEFAULT;
+    int dflt = (dsp_rate != 8000) ? RING_FRAMES_RESAMPLED : RING_FRAMES_DEFAULT;
+    int n = (v && *v) ? atoi(v) : dflt;
     if (n < 2) n = 2;
     if (n > RING_FRAMES_MAX) n = RING_FRAMES_MAX;
     return n;
@@ -535,7 +557,6 @@ static int helper_main(int pcm_fd, int as_fd)
 
     static int16_t ring[RING_SAMPLES];
     size_t ring_len = 0;                       /* in SAMPLES, not bytes */
-    const size_t ring_cap = (size_t)ring_frames() * FRAME_SAMPLES;
     static uint8_t payload[65536];
     int16_t out[FRAME_SAMPLES];
 
@@ -554,6 +575,8 @@ static int helper_main(int pcm_fd, int as_fd)
     const char *dr = getenv("LITENET_DSP_RATE");
     const int dsp_rate = (dr && *dr) ? atoi(dr) : AS_RATE;
     const int resampling = (dsp_rate != AS_RATE);
+    /* after dsp_rate: the resampled path gets a larger ring. See ring_frames_for(). */
+    const size_t ring_cap = (size_t)ring_frames_for(dsp_rate) * FRAME_SAMPLES;
     static resamp_t up, down;
     if (resampling) {
         /* 8000 -> 9600 is 6/5 up; 9600 -> 8000 is 5/6 down. The two are not
