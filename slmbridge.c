@@ -587,6 +587,19 @@ static int helper_main(int pcm_fd, int as_fd)
     static uint8_t rawbuf[8192];
     size_t rawlen = 0;                         /* odd trailing byte lives here */
     unsigned long tx = 0, rx = 0, starved = 0, dropped = 0, dup = 0, overrun = 0;
+    /* RX-frame arrival jitter. slmodemd is clocked by how fast audio arrives
+       (LITENET_TX_CLOCK=rx), so irregular delivery IS an irregular sample clock
+       to the DSP. Asterisk applies NO jitter buffer on this path -- checked,
+       nothing in the dialplan or pjsip.conf sets one -- so RTP jitter from the
+       caller's ATA reaches the equalizer unsmoothed. V.32bis at 2400 baud does
+       not care; a 3429-baud V.34 constellation might. Measured here rather
+       than argued about: the DSP's own equalizer error separates outcomes
+       completely (equerr>300 is 0 for 16) and the line probe says the
+       FREQUENCY response is identical on good and bad calls, which leaves
+       timing as the thing the probe cannot see. */
+    unsigned long jb_n = 0, jb_late = 0;
+    double jb_sum = 0.0, jb_sumsq = 0.0, jb_max = 0.0;
+    struct timespec jb_prev = {0, 0};
     const char *why = "loop ended";
 
     /* Sample slip is OPT-IN and defaults OFF. It is written, it is correct in
@@ -698,6 +711,18 @@ static int helper_main(int pcm_fd, int as_fd)
                     }
                     rx++;
                     got_audio = 1;
+                    {   /* inter-arrival gap in ms; nominal is 20 */
+                        struct timespec now;
+                        clock_gettime(CLOCK_MONOTONIC, &now);
+                        if (jb_prev.tv_sec) {
+                            double ms = (now.tv_sec - jb_prev.tv_sec) * 1000.0
+                                      + (now.tv_nsec - jb_prev.tv_nsec) / 1e6;
+                            jb_n++; jb_sum += ms; jb_sumsq += ms * ms;
+                            if (ms > jb_max) jb_max = ms;
+                            if (ms > 40.0) jb_late++;      /* a whole frame late */
+                        }
+                        jb_prev = now;
+                    }
                 } else if (hdr[0] == AS_HANGUP || hdr[0] == AS_ERROR) {
                     why = "AudioSocket HANGUP/ERROR"; break;
                 }
@@ -823,8 +848,13 @@ static int helper_main(int pcm_fd, int as_fd)
     }
 
     fprintf(stderr, "slmbridge helper: exit (%s) tx=%lu rx=%lu starved=%lu "
-            "slip-del=%lu slip-ins=%lu overrun=%lu\n",
-            why, tx, rx, starved, dropped, dup, overrun);
+            "slip-del=%lu slip-ins=%lu overrun=%lu rxgap-mean=%.1fms "
+            "rxgap-sd=%.1fms rxgap-max=%.1fms rxgap-late=%lu\n",
+            why, tx, rx, starved, dropped, dup, overrun,
+            jb_n ? jb_sum / (double)jb_n : 0.0,
+            jb_n > 1 ? sqrt(jb_sumsq / (double)jb_n
+                            - (jb_sum / (double)jb_n) * (jb_sum / (double)jb_n)) : 0.0,
+            jb_max, jb_late);
     return 0;
 }
 
