@@ -822,7 +822,35 @@ static int helper_main(int pcm_fd, int as_fd)
             } else {
                 /* Genuinely nothing to send. Hold the last level rather than
                    slamming to zero, and never go silent -- 2 s of silence is
-                   AudioSocket's liveness timeout. */
+                   AudioSocket's liveness timeout.
+
+                   ⚠️ MEASURED HAZARD, 2026-09-01. That justification is about
+                   the liveness timeout only, and against THAT goal a constant
+                   is fine. As a SIGNAL it is the worst available filler: a
+                   whole frame of DC, all energy at 0 Hz, an amplitude step at
+                   each edge, and nothing for a remote receiver's carrier or
+                   timing recovery to track through.
+
+                   On the V.34 experimental line, starvation is strongly
+                   associated with the residual handshake failure -- 0.174
+                   events/s on failures against 0.059 on calls that connect,
+                   with every single failure above 0.083/s (Mann-Whitney
+                   p < 0.00001, n=72). The absolute counts are tiny, 1-2 per
+                   call, which is the point: what matters is WHERE the frame
+                   lands. One DC frame in data mode is absorbed by error
+                   control; the same frame during V.34 Phase 3/4 training
+                   breaks the far end's acquisition.
+
+                   PRODUCTION IS UNAFFECTED IN PRACTICE and is deliberately
+                   left alone: V.32bis at 2400 baud rides through a lost 20 ms
+                   and LAPM retransmits, and those lines log zero HDLC frame
+                   errors across a day.
+
+                   Replacing the fill with a repeat of the last good frame was
+                   tried and is NOT a fix -- 13/16 vs 10/16 connects, Fisher
+                   p = 0.433, and the build carrying it showed an unexplained
+                   low-rate regression. See patches/patch_starve_fill.py and
+                   LIVE_CHANGES.md LC-098 before trying it again. */
                 int16_t fill = ring_len ? ring[ring_len - 1] : 0;
                 for (int i = 0; i < FRAME_SAMPLES; i++) out[i] = fill;
                 ring_len = 0;
