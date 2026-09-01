@@ -926,6 +926,18 @@ static pid_t pppd_pid;
    thing is worse. -1 until main() has bound and listened. */
 static int g_listen_fd = -1;
 static char  connect_rate[32];
+/* The OTHER carrier. See src/slmbridge-narrow.c for the full account: V.34
+ * negotiates each direction independently, slmodemd's "CONNECT <n>" carries
+ * its rx (UPSTREAM), and the downstream figure arrives on a separate
+ * "TxRate: <n>" line gated on S70 bit 2 (AT&A).
+ *
+ * MIRRORED HERE DELIBERATELY, UNBUILT. This file is the PRODUCTION bridge and
+ * its binary is pinned by md5 b0c8eecf4883c461a4ca65a5cc672d37; the change is
+ * carried in the source so the two files do not drift, which is a failure this
+ * project has paid for before. On the production pool today both directions
+ * are V.32bis 14,400 and symmetric, so this reports the same number twice
+ * until the fast pool actually carries V.34. */
+static char  tx_rate[32];
 
 /* Hand the modem TTY to pppd once the modem says CONNECT.
  *
@@ -980,10 +992,19 @@ static void session_file_write(const char *rate)
     }
     /* First line is the bare rate and nothing else -- retroproxy and the
      * console both parse it that way, and modemd writes it that way. Anything
-     * added later goes on a SECOND line. */
+     * added later goes on a SECOND line.
+     *
+     * That contract had a trap in it: the ip-up hook digit-stripped the WHOLE
+     * file, so a second line would have been concatenated onto the rate --
+     * 33600 and 26400 becoming 3360026400, which no reader could reject. The
+     * hook takes the first line only as of 2026-09-01. Check every reader
+     * before adding a third line. */
     fprintf(f, "%d\n", atoi(rate));
+    if (tx_rate[0])
+        fprintf(f, "down=%d up=%d\n", atoi(tx_rate), atoi(rate));
     fclose(f);
-    fprintf(stderr, "slmbridge: session file %s = %d\n", session_path, atoi(rate));
+    fprintf(stderr, "slmbridge: session file %s = %d%s\n", session_path,
+            atoi(rate), tx_rate[0] ? " (with both carriers)" : "");
 }
 
 static void session_file_clear(void)
@@ -1100,6 +1121,11 @@ static int relay_and_watch(int a, int b, int *tfdp)
                 char c = (char)buf[i];
                 if (c == '\r' || c == '\n') {
                     line[lp] = '\0';
+                    if (!strncmp(line, "TxRate:", 7)) {
+                        const char *sp = line + 7;
+                        while (*sp == ' ') sp++;
+                        snprintf(tx_rate, sizeof tx_rate, "%s", sp);
+                    }
                     if (!strncmp(line, "CONNECT", 7)) {
                         const char *sp = strchr(line, ' ');
                         snprintf(connect_rate, sizeof connect_rate, "%s",
@@ -1221,6 +1247,7 @@ static int broker_main(int port, const char *unix_path, const char *tty)
         }
         pppd_pid = 0;
         connect_rate[0] = '\0';
+        tx_rate[0] = '\0';
 
         struct pollfd wp = { .fd = us, .events = POLLIN };
         int hp = poll(&wp, 1, 8000);
