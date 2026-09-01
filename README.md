@@ -114,6 +114,39 @@ component itself ships under a proprietary license from Smart Link and is
 not included here — see their own licensing terms before building or
 distributing it.
 
+## Known limitation: what it transmits when the ring runs dry
+
+When there is no `slmodemd` output ready to send, `slmbridge` fills the frame
+with a **constant** — the last sample value, or zero — and counts it as
+`starved` in the exit line. That is deliberate and it is about AudioSocket's
+2-second liveness timeout, which a constant satisfies. As a *signal* it is the
+worst available filler: a whole frame of DC, all energy at 0 Hz, an amplitude
+step at each edge, and nothing for the far end's carrier or timing recovery to
+track through.
+
+Measured upstream on a V.34 line, starvation is strongly associated with
+handshake failure — 0.174 events/second on calls that failed against 0.059 on
+calls that connected, with every failure above 0.083/s (Mann-Whitney
+p < 0.00001, n = 72). The absolute counts are small, 1–2 per call, which is the
+point: what matters is *where* the frame lands. One DC frame in data mode is
+absorbed by error control; the same frame during V.34 Phase 3/4 training breaks
+the far end's acquisition.
+
+**For V.32bis this is not a practical problem** and the code is deliberately
+left alone: at 2400 baud a lost 20 ms is ridden through and LAPM retransmits,
+and lines running that way log zero HDLC frame errors across a day.
+
+Replacing the fill with a repeat of the last good frame is the obvious idea. It
+was tried and it is **not** a fix — 13/16 versus 10/16 connects (Fisher
+p = 0.433), and the build carrying it showed an unexplained regression to lower
+connect speeds. If you are going to attempt this, start from those numbers
+rather than from the intuition.
+
+Watch `starved=` in the helper's exit line. If it is more than one or two per
+call, the ring is being drained faster than `slmodemd` fills it, and
+`LITENET_RX_PREFILL` is the dial — at the cost of path delay, which on a V.34
+link is itself expensive.
+
 ## Attribution
 
 `slmbridge` doesn't link against or vendor any of the following — it just
