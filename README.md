@@ -96,6 +96,64 @@ instance needs each one told apart — `slmbridge` handles the multi-line
 bookkeeping so a pool of lines can run concurrently on one host without
 fighting over the same device node.
 
+## Both carriers of a V.34 call
+
+A V.34 call negotiates its two directions independently, and they are often not
+the same rate. A modem's `CONNECT` result code reports only its own side, so a
+single number describes half the link.
+
+`slmodemd` reports the answering side's **receive** rate in `CONNECT` — the
+rate the *caller* is transmitting at, i.e. upstream from the subscriber. Its
+transmit rate, the one carrying data down to the subscriber, is reported
+separately on a `TxRate:` line, and only when bit 2 of S-register 70 is set:
+
+```
+AT&A4              (S70 bit 2; do this after ATZ, which restores the defaults)
+```
+
+With that set, `slmbridge` parses both and writes them to the session file:
+
+```
+$ cat /run/litenet/sessions/<peer-ip>
+31200
+down=33600 up=31200
+```
+
+**Line 1 is unchanged and always will be.** It is the `CONNECT` figure, and
+existing readers parse the file as a bare integer. Anything added goes on a
+later line.
+
+> If you consume that file, take the **first line only**. A whole-file
+> digit-strip (`tr -dc '0-9'`) silently concatenates the two lines into
+> `3120033600` — a number no reader can reject, because any integer is a
+> plausible rate to code that only bounds it below. That bug shipped here, in
+> the PPP `ip-up` hook, on the day the second line was added.
+
+Without `AT&A4` the second line is simply absent, which is the behaviour every
+release before this one had.
+
+## Environment
+
+Everything `slmbridge` reads. Unset means the default in the right-hand column.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `LITENET_ASOCK_PATH` | — | AudioSocket listen path, broker mode |
+| `LITENET_TTY` | — | the pty `slmodemd` created, handed to `pppd` at `CONNECT` |
+| `LITENET_PPPD` | — | `pppd` arguments; unset means do not start `pppd` |
+| `LITENET_NETNS` | — | network namespace to run `pppd` in |
+| `LITENET_SESSION_IP` | — | names the session file; unset means write none |
+| `LITENET_AT_INIT` | `ATZ;ATX4;AT+MS=132,1,1200,14400;AT+MS?` | sent once at startup, `;`-separated |
+| `LITENET_AT_CMD` | `ATA` | sent per call to answer |
+| `LITENET_DSP_RATE` | `8000` | the DSP's sample rate. Resamples only when this is not 8000 |
+| `LITENET_TX_CLOCK` | — | `rx` paces transmit off the receive clock |
+| `LITENET_RX_PREFILL` | `2` | frames buffered before relaying; latency against underrun |
+| `LITENET_RING_FRAMES` | 16, or 64 when resampling | ring size in 20 ms frames |
+| `LITENET_ELASTIC` | — | elastic buffering between the two clocks |
+| `LITENET_RS_PROFILE` | — | resampler profile, see the resampler notes |
+| `LITENET_RS_FC` | — | resampler cutoff in Hz |
+| `LITENET_RS_DUMP` | — | dump resampler coefficients and exit; diagnostics only |
+
 ## Building
 
 ```sh
