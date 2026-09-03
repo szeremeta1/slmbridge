@@ -192,7 +192,7 @@ static int read_exact(int fd, void *buf, size_t n)
  *
  * WHY THIS EXISTS AGAIN, HAVING BEEN DELETED ON PURPOSE
  *
- * D-014 built slmodemd at MODEM_RATE 8000 specifically so no resampler would
+ * An earlier decision built slmodemd at MODEM_RATE 8000 specifically so no resampler would
  * exist anywhere, and that was right about the resampler it was deleting:
  * PJMEDIA converting 9600<->8000 at an arbitrary ratio inside a conference
  * bridge that was itself running at 16 kHz, i.e. two conversions and a wrong
@@ -584,7 +584,7 @@ static int helper_main(int pcm_fd, int as_fd)
        one at which V.8 -- and therefore V.34, V.90 and V.92 -- will create;
        8000 is the previous build and the rollback. */
     /* DEFAULTS TO 8000, which is the rate the pool is proven on, and 9600 is
-       opt-in. D-037 establishes that 9600 is the only rate at which V.8 will
+       opt-in. Measurement establishes that 9600 is the only rate at which V.8 will
        create -- and therefore the only rate at which V.34 is reachable at all
        -- but reaching the V.34 datapump is not the same claim as completing a
        V.34 handshake, and the second one is NOT yet measured. Two synthetic
@@ -661,7 +661,7 @@ static int helper_main(int pcm_fd, int as_fd)
      * DEFAULTS OFF. The timer path below is byte-for-byte the proven 14,400
      * path, so deploying this binary changes nothing until a line opts in. The
      * fast pool stays on the rate that carries subscribers until a real call
-     * says otherwise -- the same discipline D-037 applied to the 8000 build. */
+     * says otherwise -- the same discipline the 8000 build was held to. */
     const char *cm = bridge_env("TX_CLOCK");
     const int rx_clock = cm && !strcmp(cm, "rx");
 
