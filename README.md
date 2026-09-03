@@ -58,10 +58,10 @@ It also fixes two problems that sit underneath that one:
   band cannot see the defect it exists to catch. If a future rate needs more
   than 3,900 Hz, move that number first and let it fail.
 
-  Three filter profiles are selectable at runtime with `LITENET_RS_PROFILE`:
+  Three filter profiles are selectable at runtime with `SLMBRIDGE_RS_PROFILE`:
   the default 96/112-tap Kaiser pair (flat to 3,900), `legacy` (the original
   32-tap Blackman pair, kept as an exact rollback), and `narrow`, which
-  deliberately band-limits the *receive* direction to `LITENET_RS_FC`
+  deliberately band-limits the *receive* direction to `SLMBRIDGE_RS_FC`
   (default 3,800 Hz). `narrow` is an experiment, not a recommendation — it
   intentionally fails the transparency check, which is why the self-test
   reports it rather than asserting on it.
@@ -138,21 +138,28 @@ Everything `slmbridge` reads. Unset means the default in the right-hand column.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `LITENET_ASOCK_PATH` | — | AudioSocket listen path, broker mode |
-| `LITENET_TTY` | — | the pty `slmodemd` created, handed to `pppd` at `CONNECT` |
-| `LITENET_PPPD` | — | `pppd` arguments; unset means do not start `pppd` |
-| `LITENET_NETNS` | — | network namespace to run `pppd` in |
-| `LITENET_SESSION_IP` | — | names the session file; unset means write none |
-| `LITENET_AT_INIT` | `ATZ;ATX4;AT+MS=132,1,1200,14400;AT+MS?` | sent once at startup, `;`-separated |
-| `LITENET_AT_CMD` | `ATA` | sent per call to answer |
-| `LITENET_DSP_RATE` | `8000` | the DSP's sample rate. Resamples only when this is not 8000 |
-| `LITENET_TX_CLOCK` | — | `rx` paces transmit off the receive clock |
-| `LITENET_RX_PREFILL` | `2` | frames buffered before relaying; latency against underrun |
-| `LITENET_RING_FRAMES` | 16, or 64 when resampling | ring size in 20 ms frames |
-| `LITENET_ELASTIC` | — | elastic buffering between the two clocks |
-| `LITENET_RS_PROFILE` | — | resampler profile, see the resampler notes |
-| `LITENET_RS_FC` | — | resampler cutoff in Hz |
-| `LITENET_RS_DUMP` | — | dump resampler coefficients and exit; diagnostics only |
+| `SLMBRIDGE_ASOCK_PATH` | — | AudioSocket listen path, broker mode |
+| `SLMBRIDGE_TTY` | — | the pty `slmodemd` created, handed to `pppd` at `CONNECT` |
+| `SLMBRIDGE_PPPD` | — | `pppd` arguments; unset means do not start `pppd` |
+| `SLMBRIDGE_NETNS` | — | network namespace to run `pppd` in |
+| `SLMBRIDGE_SESSION_IP` | — | names the session file; unset means write none |
+| `SLMBRIDGE_AT_INIT` | `ATZ;ATX4;AT+MS=132,1,1200,14400;AT+MS?` | sent once at startup, `;`-separated |
+| `SLMBRIDGE_AT_CMD` | `ATA` | sent per call to answer |
+| `SLMBRIDGE_DSP_RATE` | `8000` | the DSP's sample rate. Resamples only when this is not 8000 |
+| `SLMBRIDGE_TX_CLOCK` | — | `rx` paces transmit off the receive clock |
+| `SLMBRIDGE_RX_PREFILL` | `2` | frames buffered before relaying; latency against underrun |
+| `SLMBRIDGE_RING_FRAMES` | 16, or 64 when resampling | ring size in 20 ms frames |
+| `SLMBRIDGE_ELASTIC` | — | elastic buffering between the two clocks |
+| `SLMBRIDGE_RS_PROFILE` | — | resampler profile, see the resampler notes |
+| `SLMBRIDGE_RS_FC` | — | resampler cutoff in Hz |
+| `SLMBRIDGE_RS_DUMP` | — | dump resampler coefficients and exit; diagnostics only |
+
+Every variable is also read under the older `LITENET_` prefix when the
+`SLMBRIDGE_` spelling is unset (`bridge_env()` in `slmbridge.c`). The bridge
+was extracted from a deployment that configures it that way, and the fallback
+is deliberate and permanent; new configuration should use `SLMBRIDGE_`. The
+one variable the bridge *sets*, the pty handed to `pppd`, is exported under
+both names.
 
 ## Building
 
@@ -202,7 +209,7 @@ rather than from the intuition.
 
 Watch `starved=` in the helper's exit line. If it is more than one or two per
 call, the ring is being drained faster than `slmodemd` fills it, and
-`LITENET_RX_PREFILL` is the dial — at the cost of path delay, which on a V.34
+`SLMBRIDGE_RX_PREFILL` is the dial — at the cost of path delay, which on a V.34
 link is itself expensive.
 
 ## Attribution
