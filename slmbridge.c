@@ -1,5 +1,5 @@
 /*
- * LiteNet-ISP · slmbridge — slmodemd behind AudioSocket.
+ * slmbridge — slmodemd behind AudioSocket.
  *
  * Phase 4's performance path. spandsp's V.32bis is 251 lines of empty API
  * skeleton and its V.34 never reaches data mode, so 2400 bps is the ceiling of
@@ -119,7 +119,7 @@
  * a third of a second each way is the difference between completing and sitting
  * in "Repeated info0" forever.
  *
- * LITENET_RING_FRAMES, default unchanged at 16. */
+ * SLMBRIDGE_RING_FRAMES, default unchanged at 16. */
 /* The default is larger on the RESAMPLED path, and only there.
  *
  * When the ring fills, the helper reads slmodemd's output into a buffer called
@@ -135,14 +135,34 @@
  * ring is given to the resampled path and production is left byte-identical in
  * behaviour rather than "improved" on a hunch.
  *
- * Capacity is not latency: under LITENET_TX_CLOCK=rx the ring drains one frame
- * per frame Asterisk delivers, so steady-state delay is LITENET_RX_PREFILL, not
+ * Capacity is not latency: under SLMBRIDGE_TX_CLOCK=rx the ring drains one frame
+ * per frame Asterisk delivers, so steady-state delay is SLMBRIDGE_RX_PREFILL, not
  * this number. Capacity only has to absorb a burst.
  *
- * LITENET_RING_FRAMES overrides both. */
+ * SLMBRIDGE_RING_FRAMES overrides both. */
+
+/* ------------------------------------------------------------------------
+ * Configuration is by environment variable, and every variable has one
+ * canonical name with the SLMBRIDGE_ prefix. bridge_env("X") reads
+ * SLMBRIDGE_X and, when that is unset, LITENET_X: the deployment this was
+ * written for configured the bridge under the older prefix for a year and
+ * still does, and a rename that broke a running pool would be a poor way to
+ * publish a program. The fallback is deliberate and permanent; nothing in
+ * this file reads either spelling directly.
+ * ---------------------------------------------------------------------- */
+static const char *bridge_env(const char *name)
+{
+    static char key[64];
+    snprintf(key, sizeof key, "SLMBRIDGE_%s", name);
+    const char *v = getenv(key);
+    if (v) return v;
+    snprintf(key, sizeof key, "LITENET_%s", name);
+    return getenv(key);
+}
+
 static int ring_frames_for(int dsp_rate)
 {
-    const char *v = getenv("LITENET_RING_FRAMES");
+    const char *v = bridge_env("RING_FRAMES");
     int dflt = (dsp_rate != 8000) ? RING_FRAMES_RESAMPLED : RING_FRAMES_DEFAULT;
     int n = (v && *v) ? atoi(v) : dflt;
     if (n < 2) n = 2;
@@ -177,9 +197,9 @@ static int read_exact(int fd, void *buf, size_t n)
  * PJMEDIA converting 9600<->8000 at an arbitrary ratio inside a conference
  * bridge that was itself running at 16 kHz, i.e. two conversions and a wrong
  * intermediate rate. It was wrong about the cost of the 8000 build, which
- * D-037 measures: at 8000 the V.8 datapump will not create, and V.34, V.90
- * and V.92 all route through V.8. The 8 kHz build is what caps this pool at
- * V.32bis. See DECISIONS.md D-037 for the trace.
+ * measurement shows: at 8000 the V.8 datapump will not create, and V.34, V.90
+ * and V.92 all route through V.8. The 8 kHz build is what caps a pool at
+ * V.32bis (traced on the reference deployment, 2026-08).
  *
  * So the DSP goes back to its native rate and the conversion is done here,
  * once, properly. 9600/8000 is exactly 6/5 -- a rational resampler with five
@@ -196,7 +216,7 @@ static int read_exact(int fd, void *buf, size_t n)
  * per 20 ms instead of 160 is the same 20 ms of audio at the rate the DSP
  * actually keeps time in, and the ring should now sit still.
  *
- * Set LITENET_DSP_RATE=8000 to bypass every line of this and get the old
+ * Set SLMBRIDGE_DSP_RATE=8000 to bypass every line of this and get the old
  * straight-through path back, which is the rollback.
  */
 /* THE TEST STOPPED AT 3400 Hz AND THE FILTER STOPPED WORKING AT 3500.
@@ -229,7 +249,7 @@ static int read_exact(int fd, void *buf, size_t n)
  * every component above 4000 Hz is by definition an image and not signal: input
  * at 3800 Hz mirrors to 4200 Hz, and an fc of 4250 passed it at full amplitude
  * straight into the DSP. So for the UP direction the corner is pinned at 4000 Hz
- * by physics, and the only lever on the transition is length. docs/MODEM-RATE.md
+ * by physics, and the only lever on the transition is length. An earlier note
  * queued "the computed 64-tap resampler" and the instinct was right; the number
  * was low, because 64 taps at fc=4000 is still -0.92 dB (up) and -1.39 dB (down)
  * at 3888 Hz.
@@ -237,7 +257,7 @@ static int read_exact(int fd, void *buf, size_t n)
  * The DOWN direction could legitimately relax -- decimating 9600 -> 8000 folds
  * about 4000 Hz, but the only thing between 4000 and 4800 Hz is the DSP's own
  * out-of-band emission, and real image energy does not begin until 9600-3900 =
- * 5700 Hz. Measured with LITENET_RS_DUMP on a replayed call, the blob emits
+ * 5700 Hz. Measured with SLMBRIDGE_RS_DUMP on a replayed call, the blob emits
  * -86 dBc between 4000 and 4400 Hz, so relaxing it would in fact have been
  * safe. It is kept at 4000 Hz anyway, for two reasons: the taps it would save
  * are worth less than not owing the next reader an assumption, and that -86 dBc
@@ -276,13 +296,13 @@ static int read_exact(int fd, void *buf, size_t n)
  * the band V.34's rate decision is made on; whether the far modem then picks a
  * higher symbol rate is a question for a real call, not for this file.
  *
- * LITENET_RS_PROFILE=legacy restores the old 32-tap fc=4000 Blackman pair
+ * SLMBRIDGE_RS_PROFILE=legacy restores the old 32-tap fc=4000 Blackman pair
  * exactly, which is the rollback. The new pair is the default because the only
  * caller of any of this is the 9600 experimental path -- the 32 production lines
  * run FAST_DSP_RATE=8000, where `resampling` is false and not one line of this
  * resampler executes.
  *
- * LITENET_RS_DUMP=<prefix> writes the raw pre-resample streams to
+ * SLMBRIDGE_RS_DUMP=<prefix> writes the raw pre-resample streams to
  * <prefix>-as8000.raw and <prefix>-dsp9600.raw (s16le, no header). Off unless
  * set. Diagnostic only: it does a blocking write per frame and has no place on
  * a live line. */
@@ -356,30 +376,30 @@ static void rs_init(resamp_t *r, int L, int M, int taps, double fc_hz,
 static void rs_init_pair(resamp_t *up, resamp_t *down, int dsp_rate)
 {
     const int L_up = dsp_rate / 1600, M_up = 8000 / 1600;   /* 6, 5 */
-    const char *p = getenv("LITENET_RS_PROFILE");
+    const char *p = bridge_env("RS_PROFILE");
     if (p && !strcmp(p, "legacy")) {
         rs_init(up,   L_up, M_up, 32, 4000.0, -1.0);
         rs_init(down, M_up, L_up, 32, 4000.0, -1.0);
         return;
     }
-    /* LITENET_RS_PROFILE=narrow -- deliberately band-limit the RECEIVE path.
+    /* SLMBRIDGE_RS_PROFILE=narrow -- deliberately band-limit the RECEIVE path.
      *
      * The flat 4000 Hz design below is correct as signal processing and may be
      * wrong as engineering. The caller's ATA transmits 10.7 dB down at 3750 Hz
-     * (line-probe measurement, docs/MODEM-RATE.md), so the top of the band
+     * (line-probe measurement on the reference deployment), so the top of the band
      * carries very little of his signal and proportionally more noise.
      * Reconstructing it flat hands that noise to the equalizer at full weight
      * and lets the rate selector believe in bandwidth that is not really there
-     * -- which is consistent with the new filter buying 33,600 rate DECISIONS
+     * -- which is consistent with the new filter buying 33,600 rate decisions
      * without buying reliability, and with the old 32-tap design (accidentally
      * ~7 dB down at 3888 Hz) doing better on connect rate in a paired A/B.
      *
-     * So: same modern filter quality, corner moved down to LITENET_RS_FC
+     * So: same modern filter quality, corner moved down to SLMBRIDGE_RS_FC
      * (default 3800 Hz). UP only -- the DOWN
      * direction is our transmit, which is clean and should stay flat.
      * This is a hypothesis under test, not a shipped default. */
     if (p && !strcmp(p, "narrow")) {
-        const char *f = getenv("LITENET_RS_FC");
+        const char *f = bridge_env("RS_FC");
         /* 3800, not 3400. At 96 taps a 3400 corner is a brick wall -- -59 dB
          * by 3600 -- which would delete the top of the 3429-baud constellation
          * rather than de-emphasise it. 3800 measures -6.0 dB at 3800 Hz, which
@@ -433,7 +453,7 @@ static int rs_process(resamp_t *r, const int16_t *in, int nin,
 }
 
 /* Env-gated raw taps on both pre-resample streams, so the filter's inputs can
-   be looked at instead of reasoned about. LITENET_RS_DUMP=<prefix> writes
+   be looked at instead of reasoned about. SLMBRIDGE_RS_DUMP=<prefix> writes
    <prefix>-as8000.raw (what Asterisk hands us) and <prefix>-dsp9600.raw (what
    the DSP hands us). s16le, no header. Opens on first use, never closes -- a
    diagnostic run is one call long. Blocking writes: bench only. */
@@ -443,7 +463,7 @@ static void rs_dump(int which, const int16_t *p, int n)
     static int tried;
     if (!tried) {
         tried = 1;
-        const char *pre = getenv("LITENET_RS_DUMP");
+        const char *pre = bridge_env("RS_DUMP");
         if (pre && *pre) {
             char path[512];
             snprintf(path, sizeof path, "%s-as8000.raw", pre);
@@ -562,7 +582,7 @@ static int helper_main(int pcm_fd, int as_fd)
 
     /* The DSP's own sample rate. 9600 is slmodemd's native rate and the only
        one at which V.8 -- and therefore V.34, V.90 and V.92 -- will create;
-       8000 is the previous build and the rollback. See DECISIONS.md D-037. */
+       8000 is the previous build and the rollback. */
     /* DEFAULTS TO 8000, which is the rate the pool is proven on, and 9600 is
        opt-in. D-037 establishes that 9600 is the only rate at which V.8 will
        create -- and therefore the only rate at which V.34 is reachable at all
@@ -572,7 +592,7 @@ static int helper_main(int pcm_fd, int as_fd)
        neither rig is trustworthy enough to say whether that is the modem or
        the rig. Until a real call settles it, the default must be the rate that
        is known to carry subscribers. */
-    const char *dr = getenv("LITENET_DSP_RATE");
+    const char *dr = bridge_env("DSP_RATE");
     const int dsp_rate = (dr && *dr) ? atoi(dr) : AS_RATE;
     const int resampling = (dsp_rate != AS_RATE);
     /* after dsp_rate: the resampled path gets a larger ring. See ring_frames_for(). */
@@ -588,7 +608,7 @@ static int helper_main(int pcm_fd, int as_fd)
     size_t rawlen = 0;                         /* odd trailing byte lives here */
     unsigned long tx = 0, rx = 0, starved = 0, dropped = 0, dup = 0, overrun = 0;
     /* RX-frame arrival jitter. slmodemd is clocked by how fast audio arrives
-       (LITENET_TX_CLOCK=rx), so irregular delivery IS an irregular sample clock
+       (SLMBRIDGE_TX_CLOCK=rx), so irregular delivery IS an irregular sample clock
        to the DSP. Asterisk applies NO jitter buffer on this path -- checked,
        nothing in the dialplan or pjsip.conf sets one -- so RTP jitter from the
        caller's ATA reaches the equalizer unsmoothed. V.32bis at 2400 baud does
@@ -604,13 +624,13 @@ static int helper_main(int pcm_fd, int as_fd)
 
     /* Sample slip is OPT-IN and defaults OFF. It is written, it is correct in
        principle, and it made things measurably worse -- see the note at the top
-       of this section and DECISIONS.md D-017. Enable with LITENET_ELASTIC=1
+       of this section. Enable with SLMBRIDGE_ELASTIC=1
        once the underlying rate question is settled. */
-    const char *el = getenv("LITENET_ELASTIC");
+    const char *el = bridge_env("ELASTIC");
     const int elastic = el && *el == '1';
 
     /* ------------------------------------------------------------------ *
-     * TX CLOCK -- the fix DECISIONS.md D-037 and docs/MODEM-RATE.md point at.
+     * TX CLOCK -- the fix the rate measurements pointed at.
      *
      * slmodemd is sample-SYNCHRONOUS: its main loop (modem_main.c ~962-996)
      * reads `count` samples from this helper's socketpair, runs modem_process()
@@ -632,7 +652,7 @@ static int helper_main(int pcm_fd, int as_fd)
      * the "Repeated info0" that stalls every faster train. Measured: at 8000
      * starved=153/call, at 9600 overrun=12/call -- a clock mismatch, not a rate.
      *
-     * LITENET_TX_CLOCK=rx removes the second clock. We emit exactly one frame to
+     * SLMBRIDGE_TX_CLOCK=rx removes the second clock. We emit exactly one frame to
      * Asterisk for each audio frame Asterisk hands us, so TX rate == RX rate ==
      * the ONE clock, structurally, and the ring only ever holds the pipeline
      * delay between feeding slmodemd and reading its reply. No drift to
@@ -642,7 +662,7 @@ static int helper_main(int pcm_fd, int as_fd)
      * path, so deploying this binary changes nothing until a line opts in. The
      * fast pool stays on the rate that carries subscribers until a real call
      * says otherwise -- the same discipline D-037 applied to the 8000 build. */
-    const char *cm = getenv("LITENET_TX_CLOCK");
+    const char *cm = bridge_env("TX_CLOCK");
     const int rx_clock = cm && !strcmp(cm, "rx");
 
     /* A small pre-fill so the first RX-triggered drains have slmodemd output to
@@ -651,7 +671,7 @@ static int helper_main(int pcm_fd, int as_fd)
        right value is the pipeline depth and that is worth measuring, not
        guessing. Only meaningful in rx-clock mode. */
     if (rx_clock) {
-        const char *pf = getenv("LITENET_RX_PREFILL");
+        const char *pf = bridge_env("RX_PREFILL");
         int frames = (pf && *pf) ? atoi(pf) : 2;
         if (frames < 0) frames = 0;
         if ((size_t)frames > ring_cap / FRAME_SAMPLES) frames = (int)(ring_cap / FRAME_SAMPLES);
@@ -849,8 +869,7 @@ static int helper_main(int pcm_fd, int as_fd)
                    Replacing the fill with a repeat of the last good frame was
                    tried and is NOT a fix -- 13/16 vs 10/16 connects, Fisher
                    p = 0.433, and the build carrying it showed an unexplained
-                   low-rate regression. See patches/patch_starve_fill.py and
-                   LIVE_CHANGES.md LC-098 before trying it again. */
+                   low-rate regression. Measured before trying it again. */
                 int16_t fill = ring_len ? ring[ring_len - 1] : 0;
                 for (int i = 0; i < FRAME_SAMPLES; i++) out[i] = fill;
                 ring_len = 0;
@@ -973,7 +992,7 @@ static char session_path[128];
 
 static void session_file_write(const char *rate)
 {
-    const char *ip = getenv("LITENET_SESSION_IP");
+    const char *ip = bridge_env("SESSION_IP");
     if (!ip || !*ip || !rate || !*rate) {
         fprintf(stderr, "slmbridge: no session file -- ip=[%s] rate=[%s]\n",
                 ip ? ip : "(unset)", rate ? rate : "(null)");
@@ -1014,8 +1033,8 @@ static void session_file_clear(void)
 
 static void hand_off_to_pppd(int *tfd, const char *tty)
 {
-    const char *args = getenv("LITENET_PPPD");
-    const char *netns = getenv("LITENET_NETNS");
+    const char *args = bridge_env("PPPD");
+    const char *netns = bridge_env("NETNS");
     if (!args || pppd_pid > 0)
         return;
 
@@ -1062,7 +1081,7 @@ static void hand_off_to_pppd(int *tfd, const char *tty)
  * "helper never connected -- is slmodemd running?".
  *
  * That was invisible for as long as it existed because slmodemd used to SIGABRT
- * at teardown (patches/slmodemd-fdset-guard.py), which restarted the unit and
+ * at teardown (a guard patched into slmodemd's fd-set handling), which restarted the unit and
  * re-armed the line by accident. Fixing the crash removed the accidental
  * recovery and left this. Worse than a plain EBADF: fd numbers get reused, so
  * "ATH\r" could land in whatever descriptor took that number, and the close()
@@ -1130,7 +1149,7 @@ static int relay_and_watch(int a, int b, int *tfdp)
                         const char *sp = strchr(line, ' ');
                         snprintf(connect_rate, sizeof connect_rate, "%s",
                                  sp ? sp + 1 : "");
-                        hand_off_to_pppd(tfdp, getenv("LITENET_TTY"));
+                        hand_off_to_pppd(tfdp, bridge_env("TTY"));
                         tfd = *tfdp;   /* now -1; the fd belongs to pppd */
                     }
                     lp = 0;
@@ -1158,7 +1177,8 @@ static int relay_and_watch(int a, int b, int *tfdp)
 
 static int broker_main(int port, const char *unix_path, const char *tty)
 {
-    setenv("LITENET_TTY", tty, 1);
+    setenv("SLMBRIDGE_TTY", tty, 1);
+    setenv("LITENET_TTY", tty, 1); /* the older spelling, for scripts that read it */
     signal(SIGPIPE, SIG_IGN);
     unlink(unix_path);
     int us = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -1201,7 +1221,7 @@ static int broker_main(int port, const char *unix_path, const char *tty)
      * helper saw only an already-closed socket. A real modem is configured at
      * startup and answers instantly; so is this one. */
     {
-        const char *at_init = getenv("LITENET_AT_INIT");
+        const char *at_init = bridge_env("AT_INIT");
         if (!at_init) at_init = "ATZ;ATX4;AT+MS=132,1,1200,14400;AT+MS?";
         int t = open(tty, O_RDWR | O_NOCTTY);
         if (t < 0) {
@@ -1236,7 +1256,7 @@ static int broker_main(int port, const char *unix_path, const char *tty)
            ATW2 = CONNECT reports the line rate, not the 115200 serial rate. */
         /* One write, no sleeps. Anything slower than this races the 2000 ms
            AudioSocket liveness timeout. */
-        const char *at_cmd = getenv("LITENET_AT_CMD");
+        const char *at_cmd = bridge_env("AT_CMD");
         if (!at_cmd) at_cmd = "ATA";
         int t = open(tty, O_RDWR | O_NOCTTY | O_NONBLOCK);
         if (t >= 0) {
@@ -1310,7 +1330,7 @@ int main(int argc, char **argv)
 {
     /* slmodemd execs us as: <self> <dial_string> <fd>. Anything else and we
        were run by a human who wants the usage message. */
-    const char *upath = getenv("LITENET_ASOCK_PATH");
+    const char *upath = bridge_env("ASOCK_PATH");
     if (!upath) upath = "/run/litenet/slm0.sock";
 
     if (argc >= 2 && !strcmp(argv[1], "--broker")) {

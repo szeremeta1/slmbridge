@@ -104,22 +104,22 @@ int main(void)
 
     /* Report the legacy design too, so the regression this replaced stays
        visible in the test output rather than only in a commit message. */
-    setenv("LITENET_RS_PROFILE", "legacy", 1);
+    setenv("SLMBRIDGE_RS_PROFILE", "legacy", 1);
     sweep("LEGACY profile (32 tap, fc 4000, Blackman) -- reference only", 99.0);
-    unsetenv("LITENET_RS_PROFILE");
+    unsetenv("SLMBRIDGE_RS_PROFILE");
 
     fails += sweep("DEFAULT profile (96/112 tap, fc 4000, Kaiser b=5)", 0.50);
     fails += alias_up(-60.0);
 
     /* NARROW profile: deliberately NOT transparent at the top of the band.
-       It band-limits the RECEIVE path to LITENET_RS_FC (default 3400) because
+       It band-limits the RECEIVE path to SLMBRIDGE_RS_FC (default 3400) because
        the caller's ATA is already 10.7 dB down at 3750 Hz, so reconstructing
        that region flat mostly amplifies noise. It is reported, not asserted --
        failing the 300-3900 transparency check is the WHOLE POINT of it, and
        asserting transparency here would make the test contradict the design. */
-    setenv("LITENET_RS_PROFILE", "narrow", 1);
+    setenv("SLMBRIDGE_RS_PROFILE", "narrow", 1);
     sweep("NARROW profile (96/112 tap, rx fc 3800) -- reference, rolloff intended", 99.0);
-    unsetenv("LITENET_RS_PROFILE");
+    unsetenv("SLMBRIDGE_RS_PROFILE");
 
     /* DC gain: a resampler that is not unity at DC quietly changes level. */
     resamp_t d2, u2; rs_init_pair(&u2, &d2, 9600);
