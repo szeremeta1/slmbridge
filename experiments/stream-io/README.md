@@ -12,7 +12,11 @@ commit when this branch was prepared. The source SHA-256 is
 `9ddc2eae070d5082b59d67d7f955fd8979485e03f775ca9cdee2d16da3af6308`.
 The transformation must produce reviewed candidate source SHA-256
 `d354ab6a4ef5dd9a5685a80682ee05cfdb989274b2c0a6f07b877d311939597b`.
-The builder rejects source or transformation drift.
+The builder rejects source or transformation drift. It also requires regular
+source/fixture files, hashes them before and after the run, verifies copied and
+generated sources, and records whether all inputs remained unchanged. Each
+compiler or test command has a 90-second deadline. The test fixtures explicitly
+pin their public helper controls so ambient settings cannot select an arm.
 
 ## Build and validate
 

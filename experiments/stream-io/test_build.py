@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import tempfile
+import importlib.util
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch as mock
@@ -42,6 +44,30 @@ class Checks(unittest.TestCase):
             self.assertFalse(dest.exists())
     def test_exact_reviewed_transform(self):
         with tempfile.TemporaryDirectory() as t,mock('platform.system',return_value='Linux'):
-            result=build.prepare(source_path(),Path(t)/'new')
+            original,result=build.prepare(source_path(),Path(t)/'new')
+            self.assertEqual(original,source_path().read_bytes())
             self.assertTrue(result.startswith('/*'))
+
+    def test_bounded_commands_and_changed_inputs(self):
+        with mock('build.subprocess.run') as invoke:
+            invoke.return_value.returncode=0
+            invoke.return_value.stdout=invoke.return_value.stderr=''
+            build.execute(['true'],OWN)
+            self.assertEqual(invoke.call_args.kwargs['timeout'],90)
+        with tempfile.TemporaryDirectory() as t:
+            p=Path(t)/'source';p.write_text('before')
+            expected={p:build.sha(p)};p.write_text('after')
+            with self.assertRaisesRegex(ValueError,'input changed'):build.verify_inputs(expected)
+            p.unlink();p.symlink_to(source_path())
+            with self.assertRaisesRegex(ValueError,'input changed'):build.verify_inputs(expected)
+
+    def test_paced_fixture_pins_all_helper_controls(self):
+        spec=importlib.util.spec_from_file_location('paced_fixture',OWN/'continuous-cycle.py')
+        fixture=importlib.util.module_from_spec(spec);spec.loader.exec_module(fixture)
+        fixed={'DSP_RATE':'9600','TX_CLOCK':'rx','RING_FRAMES':'8','RX_PREFILL':'8',
+               'RS_DUMP':'','RS_PROFILE':'','RS_FC':'3800','ELASTIC':'0','RXGAP_LOG_MS':'0','STREAM_IO':'1'}
+        hostile={'SLMBRIDGE_'+key:'unreviewed' for key in fixed}
+        hostile.update(SLMBRIDGE_EXTRA_CONTROL='unreviewed',PATH='/fixture')
+        with mock.dict(os.environ,hostile,clear=True):result=fixture.fixture_environment(9600)
+        self.assertEqual(result,{'PATH':'/fixture',**{'SLMBRIDGE_'+key:value for key,value in fixed.items()}})
 if __name__=='__main__':unittest.main()

@@ -16,6 +16,16 @@ def fill(s, byte):
         except BlockingIOError:
             return n
 
+def fixture_environment(rate):
+    env = {k:v for k,v in os.environ.items() if not k.startswith('SLMBRIDGE_')}
+    fixed = {'DSP_RATE':str(rate), 'TX_CLOCK':'rx', 'RING_FRAMES':'8', 'RX_PREFILL':'8',
+             'RS_DUMP':'', 'RS_PROFILE':'', 'RS_FC':'3800', 'ELASTIC':'0', 'RXGAP_LOG_MS':'0',
+             'STREAM_IO':'1'}
+    # Each helper setting has an explicit public value, including empty
+    # defaults, so neither ambient values nor compatibility aliases select it.
+    env.update({'SLMBRIDGE_'+k:v for k,v in fixed.items()})
+    return env
+
 def run(payload_len, small=False, rate=8000):
     a, ah = socket.socketpair()
     p, ph = socket.socketpair()
@@ -24,10 +34,7 @@ def run(payload_len, small=False, rate=8000):
         ph.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
     fill_byte, frame_byte = (0, 0) if rate == 9600 else (0xA5, 0x39)
     dsp_backlog, helper_backlog = fill(p, fill_byte), fill(ph, fill_byte)
-    env = dict(os.environ, SLMBRIDGE_DSP_RATE=str(rate), SLMBRIDGE_TX_CLOCK='rx',
-               SLMBRIDGE_RING_FRAMES='8', SLMBRIDGE_RX_PREFILL='8', SLMBRIDGE_STREAM_IO='1',
-               SLMBRIDGE_RS_DUMP='', SLMBRIDGE_RS_PROFILE='', SLMBRIDGE_RS_FC='3800',
-               SLMBRIDGE_ELASTIC='0', SLMBRIDGE_RXGAP_LOG_MS='0')
+    env = fixture_environment(rate)
     proc = subprocess.Popen([str(Path(__file__).with_name('helper-only')), str(ph.fileno()), str(ah.fileno())],
                             env=env, pass_fds=[ph.fileno(), ah.fileno()], stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -92,5 +99,6 @@ def run(payload_len, small=False, rate=8000):
                   stderr=stderr.decode())
     print(json.dumps(result), flush=True)
 
-run(int(sys.argv[1]) if len(sys.argv) > 1 else 320,
-    len(sys.argv) > 2 and sys.argv[2] == 'small', int(sys.argv[3]) if len(sys.argv) > 3 else 8000)
+if __name__ == '__main__':
+    run(int(sys.argv[1]) if len(sys.argv) > 1 else 320,
+        len(sys.argv) > 2 and sys.argv[2] == 'small', int(sys.argv[3]) if len(sys.argv) > 3 else 8000)

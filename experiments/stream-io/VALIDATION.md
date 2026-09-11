@@ -107,3 +107,29 @@ pending bytes does not establish an empty FIFO throughout a call. Physical
 speed, reliability, retrains and sustained payload still need independent
 measurement before any promotion. Raw manifests remain outside this branch;
 this file preserves the inspectable, normalized results and exact build IDs.
+
+## Reproduction hardening checkpoint
+
+A fresh isolated Linux run after the builder/fixture hardening passes six
+builder tests, the complete component and integration suites, eight paced
+cycles and three timer comparisons. All nine supplied build/fixture files and
+the public source retain their initial hashes; copied fixtures and both
+generated sources also pass their final checks. Every compiler/test command
+has a 90-second deadline. No runtime source, transformation or header changed:
+the generated C and executable still have the exact hashes in the Identity
+table. The earlier four-test record above is retained as historical evidence.
+
+The four ordinary-frame cases complete exactly (26/22 frames with small
+buffers; 436/363 with default buffers), in 0.505/0.425 and 8.709/7.248 seconds
+respectively for 8/9.6 kHz. The maximum-frame small-buffer cases also complete
+exactly. Both maximum-frame/default-buffer cases still fail explicitly with
+ETIMEDOUT, after 2.631/2.513 seconds; these remain containment results, not
+delivery successes. The three enabled timer gaps are 20.058, 20.072 and
+20.076 ms; the corresponding legacy observations are 20.028, 20.017 and
+20.019 ms. Public fixture controls are now explicitly fixed, including default
+filter and timer settings, rather than being inherited from the caller.
+
+The raw build-manifest SHA-256 is
+`a61da87b154c22b1ef92984b59e120ad728c627c8f0563a0e79411428c3bd861`.
+It remains a local provenance artifact. This additional run is generated-byte
+AF_UNIX evidence only and adds no physical speed or reliability result.

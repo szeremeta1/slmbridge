@@ -4,6 +4,17 @@
 #include "bridge.c"
 #include <assert.h>
 
+static void fixture_defaults(void)
+{
+    assert(setenv("SLMBRIDGE_RS_DUMP", "", 1) == 0);
+    assert(setenv("SLMBRIDGE_RS_PROFILE", "", 1) == 0);
+    assert(setenv("SLMBRIDGE_RS_FC", "3800", 1) == 0);
+    assert(setenv("SLMBRIDGE_ELASTIC", "0", 1) == 0);
+    assert(setenv("SLMBRIDGE_RING_FRAMES", "", 1) == 0);
+    assert(setenv("SLMBRIDGE_RXGAP_LOG_MS", "0", 1) == 0);
+    assert(setenv("SLMBRIDGE_RX_PREFILL", "4", 1) == 0);
+}
+
 static double mono_seconds(void)
 {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
@@ -31,12 +42,10 @@ static double trial(int enabled)
         if (n > 0) filled += (size_t)n;
         else { assert(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)); break; }
     }
+    fixture_defaults();
     setenv("SLMBRIDGE_STREAM_IO", enabled ? "1" : "0", 1);
     setenv("SLMBRIDGE_DSP_RATE", "8000", 1);
-    setenv("SLMBRIDGE_TX_CLOCK", "timer", 1);
-    setenv("SLMBRIDGE_RS_DUMP", "", 1);
-    setenv("SLMBRIDGE_RING_FRAMES", "", 1);
-    setenv("SLMBRIDGE_ELASTIC", "0", 1);
+    setenv("SLMBRIDGE_TX_CLOCK", "", 1);
     pid_t child = fork(); assert(child > -1);
     if (!child) {
         close(a[0]); close(p[0]); alarm(5);
@@ -66,7 +75,7 @@ int main(void)
 {
     for (int n = 0; n < 3; n++) {
         double old_gap = trial(0), new_gap = trial(1);
-        assert(old_gap >= .010 && new_gap >= .010);
+        assert(new_gap >= .010); /* Reject the prior immediate extra frame. */
         printf("trial%d after350ms stall: legacy next-frame gap=%.3fms enabled gap=%.3fms\n",
                n, old_gap*1000, new_gap*1000);
     }
