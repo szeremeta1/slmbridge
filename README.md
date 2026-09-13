@@ -69,8 +69,9 @@ It also fixes two problems that sit underneath that one:
   whatever rate its device delivers audio. An implementation that reads at
   one clock and writes at an independent one lets the two drift apart, which
   shows up as accumulating latency and eventually dropped/repeated frames.
-  `slmbridge` slaves its transmit clock to its receive clock, making the two
-  one by construction rather than by periodic correction.
+  With `SLMBRIDGE_TX_CLOCK=rx`, the audio helper paces one output frame per
+  received audio frame. The default uses timer pacing. The setting must reach
+  the helper process that performs the audio relay.
 
 ## How it works
 
@@ -146,8 +147,8 @@ Everything `slmbridge` reads. Unset means the default in the right-hand column.
 | `SLMBRIDGE_AT_INIT` | `ATZ;ATX4;AT+MS=132,1,1200,14400;AT+MS?` | sent once at startup, `;`-separated |
 | `SLMBRIDGE_AT_CMD` | `ATA` | sent per call to answer; at most 62 bytes before the added CR |
 | `SLMBRIDGE_DSP_RATE` | `8000` | the DSP's sample rate. Resamples only when this is not 8000 |
-| `SLMBRIDGE_TX_CLOCK` | — | `rx` paces transmit off the receive clock |
-| `SLMBRIDGE_RX_PREFILL` | `2` | frames buffered before relaying; latency against underrun |
+| `SLMBRIDGE_TX_CLOCK` | unset: timer pacing | `rx` paces transmit off the receive clock |
+| `SLMBRIDGE_RX_PREFILL` | `2` | initial buffered frames when `TX_CLOCK=rx` |
 | `SLMBRIDGE_RING_FRAMES` | 16, or 64 when resampling | ring size in 20 ms frames |
 | `SLMBRIDGE_ELASTIC` | — | elastic buffering between the two clocks |
 | `SLMBRIDGE_RS_PROFILE` | — | resampler profile, see the resampler notes |
@@ -160,6 +161,14 @@ was extracted from a deployment that configures it that way, and the fallback
 is deliberate and permanent; new configuration should use `SLMBRIDGE_`. The
 one variable the bridge *sets*, the pty handed to `pppd`, is exported under
 both names.
+
+The broker and audio helper are separate processes. `slmodemd` forks and
+executes the helper, so audio settings such as clock, prefill and DSP rate must
+be passed to `slmodemd` before it starts. Exporting them later for the broker
+does not change the modem's existing environment or its future helper's
+inheritance. Verify each process role separately: a broker showing RX clocking
+does not establish that the helper is using it. Likewise, verify that the
+helper's actual unprivileged identity can execute the configured binary.
 
 The answer command is prepared once, before the broker opens listeners or the
 modem. Commands of 63 bytes or more fail startup explicitly: the 64-byte buffer
