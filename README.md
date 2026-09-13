@@ -144,7 +144,7 @@ Everything `slmbridge` reads. Unset means the default in the right-hand column.
 | `SLMBRIDGE_NETNS` | — | network namespace to run `pppd` in |
 | `SLMBRIDGE_SESSION_IP` | — | names the session file; unset means write none |
 | `SLMBRIDGE_AT_INIT` | `ATZ;ATX4;AT+MS=132,1,1200,14400;AT+MS?` | sent once at startup, `;`-separated |
-| `SLMBRIDGE_AT_CMD` | `ATA` | sent per call to answer |
+| `SLMBRIDGE_AT_CMD` | `ATA` | sent per call to answer; at most 62 bytes before the added CR |
 | `SLMBRIDGE_DSP_RATE` | `8000` | the DSP's sample rate. Resamples only when this is not 8000 |
 | `SLMBRIDGE_TX_CLOCK` | — | `rx` paces transmit off the receive clock |
 | `SLMBRIDGE_RX_PREFILL` | `2` | frames buffered before relaying; latency against underrun |
@@ -161,11 +161,25 @@ is deliberate and permanent; new configuration should use `SLMBRIDGE_`. The
 one variable the bridge *sets*, the pty handed to `pppd`, is exported under
 both names.
 
+The answer command is prepared once, before the broker opens listeners or the
+modem. Commands of 63 bytes or more fail startup explicitly: the 64-byte buffer
+must also contain the added CR and terminating NUL. Earlier versions could send
+NUL in place of CR at the boundary or pass an out-of-bounds length to `write()`.
+The default `ATA`, empty configuration and commands through 62 bytes retain their
+existing behavior. This guard does not validate AT syntax or repair short writes.
+
+`make check` exercises the shipping formatter for every length from 0 through
+4096, including exact CR/NUL placement and surrounding memory canaries, alongside
+the resampler checks. The guard was additionally exercised through inert broker
+paths under AddressSanitizer and UndefinedBehaviorSanitizer on macOS and Linux.
+These are memory-safety and command-boundary checks, not physical modem speed or
+reliability evidence.
+
 ## Building
 
 ```sh
 make          # builds slmbridge
-make check    # builds and runs the resampler self-test
+make check    # tests the answer-command formatter and resampler
 ```
 
 Requires a C compiler and `pthread`/`libm`. No other dependencies — this
