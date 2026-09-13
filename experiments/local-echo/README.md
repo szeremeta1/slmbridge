@@ -25,6 +25,32 @@ I/O delay or normal build. One frame is a sample-domain relationship, not proof
 of a physical 20 ms echo or a correct modem delay setting. There are no physical
 modem results or speed/reliability claims for this public candidate.
 
+## Related physical observation, September 13
+
+A separate narrow-profile integration of the same reference helper completed
+two fixed observe-only hardware slots, with no echo mixed. A US Robotics modem
+passed 393,216 fresh random bytes each way, DNS, certificate-checked HTTPS and
+a 241-second PPP session. Its reference epoch covered 13,029 received/committed
+frames. A StarTech modem failed to establish carrier, but its 1,600-frame
+reference epoch remained valid. Both epochs had one warmup, no mixed/clipped
+frames, no pending output and complete attributed transport delivery.
+
+This is reference feasibility in that integration, not physical validation of
+this public-profile build, a successful StarTech connection or evidence that
+injected echo improves speed/reliability. The public-profile source and binary
+hashes below retain their separate offline validation status. A subsequent
+interleaved observe/mix comparison is needed before any treatment claim.
+
+Two failed setup attempts exposed deployment checks that matter here. First,
+root could hash a binary inside private build directories while the unprivileged
+helper could not execute through them. Copy only the reviewed executable into
+an appropriate serving directory and test execution as its actual identity.
+Second, a launcher exported RX clock settings only after starting slmodemd;
+its broker received them, but the later helper inherited slmodemd's earlier
+environment. A union of process environments hid the difference. Supply and
+verify the settings separately in both roles before a call. A broker showing
+RX clocking does not prove that its separately exec-ed audio helper uses it.
+
 ## Reference evidence
 
 `journal.py` checks one complete local-reference record against an independently
