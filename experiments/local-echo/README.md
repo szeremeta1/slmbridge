@@ -25,6 +25,24 @@ I/O delay or normal build. One frame is a sample-domain relationship, not proof
 of a physical 20 ms echo or a correct modem delay setting. There are no physical
 modem results or speed/reliability claims for this public candidate.
 
+## Reference evidence
+
+`journal.py` checks one complete local-reference record against an independently
+verified enabled-transport proof for the same journal. It binds the helper PID,
+boot, executable, unit, stream and lifetime, then checks source order and counter
+invariants. Invalid epochs retain their frozen counters and reason. Partial
+transport delivery and extra whole-call output remain separate failures to
+qualify. Fragmented reference records refuse; no continuation is guessed.
+Actual executable hashes, process generations and mode readback remain the
+controller's responsibility. A journal pathname alone is insufficient.
+
+Run `python3 experiments/local-echo/journal-test.py` for eleven offline test
+methods, including real C-generated observe, mix, invalid and partial-reference
+records. Attribution, ordering, overflow and transport faults are also checked.
+A valid reference is not proof of complete audio delivery, physical echo delay
+or a reliable call. This analyzer changes no generated bridge source or binary
+and starts no physical experiment.
+
 ## Reproduce
 
 First build the pinned stream experiment into a new private output directory.
