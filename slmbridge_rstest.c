@@ -96,9 +96,42 @@ static int alias_up(double tol_db)
     return fails;
 }
 
+/* The answer guard runs on the shipping formatter, including exact boundary
+ * lengths. It never opens a modem or socket. */
+static int answer_command_test(void)
+{
+    struct { unsigned char before; char bytes[64]; unsigned char after; } guarded;
+    char command[4097];
+    memset(command, 'A', sizeof command - 1);
+    command[sizeof command - 1] = '\0';
+    int failures = 0;
+    for (size_t length = 0; length < sizeof command; length++) {
+        char saved = command[length];
+        command[length] = '\0';
+        guarded.before = 0x51; guarded.after = 0x95;
+        memset(guarded.bytes, 0x33, sizeof guarded.bytes);
+        errno = 0;
+        int actual = bridge_answer_command(guarded.bytes, sizeof guarded.bytes, command);
+        int valid = guarded.before == 0x51 && guarded.after == 0x95;
+        if (length <= 62)
+            valid = valid && actual == (int)length + 1 &&
+                memcmp(guarded.bytes, command, length) == 0 &&
+                guarded.bytes[length] == '\r' && guarded.bytes[length + 1] == '\0';
+        else
+            valid = valid && actual == -1 && errno == EMSGSIZE;
+        if (!valid) failures++;
+        command[length] = saved;
+    }
+    if (bridge_answer_command(guarded.bytes, sizeof guarded.bytes, "ATA") != 4 ||
+        memcmp(guarded.bytes, "ATA\r", 5) != 0) failures++;
+    printf("answer command: lengths 0..4096, exact CR/NUL, canaries and default ATA %s\n",
+           failures ? "FAILED" : "ok");
+    return failures;
+}
+
 int main(void)
 {
-    int fails = 0;
+    int fails = answer_command_test();
     const int N = 9600 * 4;
     static int16_t in[38400], mid[38400], out[38400];
 

@@ -1175,8 +1175,31 @@ static int relay_and_watch(int a, int b, int *tfdp)
     }
 }
 
+/* The complete command, CR and terminating NUL must fit. snprintf returns
+ * the required length even on truncation; that value is not safe to write. */
+static int bridge_answer_command(char *buffer, size_t capacity, const char *command)
+{
+    int length = snprintf(buffer, capacity, "%s\r", command);
+    if (length < 0 || (size_t)length >= capacity) {
+        errno = EMSGSIZE;
+        return -1;
+    }
+    return length;
+}
+
 static int broker_main(int port, const char *unix_path, const char *tty)
 {
+    /* Prepare before listeners or modem I/O so a bad configuration cannot
+     * accept a call and transmit a shortened command. Keep an owned copy. */
+    const char *at_cmd = bridge_env("AT_CMD");
+    if (!at_cmd) at_cmd = "ATA";
+    char answer_command[64];
+    int answer_length = bridge_answer_command(answer_command, sizeof answer_command, at_cmd);
+    if (answer_length < 0) {
+        fprintf(stderr, "slmbridge: invalid AT_CMD: command plus CR does not fit answer buffer\n");
+        return 1;
+    }
+
     setenv("SLMBRIDGE_TTY", tty, 1);
     setenv("LITENET_TTY", tty, 1); /* the older spelling, for scripts that read it */
     signal(SIGPIPE, SIG_IGN);
@@ -1256,14 +1279,10 @@ static int broker_main(int port, const char *unix_path, const char *tty)
            ATW2 = CONNECT reports the line rate, not the 115200 serial rate. */
         /* One write, no sleeps. Anything slower than this races the 2000 ms
            AudioSocket liveness timeout. */
-        const char *at_cmd = bridge_env("AT_CMD");
-        if (!at_cmd) at_cmd = "ATA";
         int t = open(tty, O_RDWR | O_NOCTTY | O_NONBLOCK);
         if (t >= 0) {
-            char buf[64];
-            int n = snprintf(buf, sizeof buf, "%s\r", at_cmd);
-            ssize_t w = write(t, buf, (size_t)n); (void)w;
-            fprintf(stderr, "slmbridge: sent '%s'\n", at_cmd);
+            ssize_t w = write(t, answer_command, (size_t)answer_length); (void)w;
+            fprintf(stderr, "slmbridge: sent '%.*s'\n", answer_length - 1, answer_command);
         }
         pppd_pid = 0;
         connect_rate[0] = '\0';
