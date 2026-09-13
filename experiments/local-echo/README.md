@@ -35,6 +35,10 @@ transport delivery and extra whole-call output remain separate failures to
 qualify. Fragmented reference records refuse; no continuation is guessed.
 Actual executable hashes, process generations and mode readback remain the
 controller's responsibility. A journal pathname alone is insufficient.
+A final pending output preserves validity of the prior committed reference
+already used for RX, while delivery and treatment qualification remain false.
+Exit counters alone cannot locate that pending frame relative to intentional
+teardown or the native call exposure.
 
 Run `python3 experiments/local-echo/journal-test.py` for eleven offline test
 methods, including real C-generated observe, mix, invalid and partial-reference

@@ -85,8 +85,11 @@ def analyze(raw, mode, transport, executable, unit):
     if transport.get("transport_error_observed") is not False: issues.append("transport_error_or_unknown")
     if transport.get("pending_output_observed") is not False: issues.append("transport_output_pending_or_unknown")
     if transport.get("partial_input_observed") is not False: issues.append("transport_input_partial_or_unknown")
-    reference_valid = not invalid and received == committed and not counts["pending"]
-    delivery_complete = complete_counts and all(transport.get(k) is False for k in
+    # A final pending output does not retroactively invalidate the previous
+    # fully committed reference already selected for RX. Delivery remains a
+    # separate incomplete observation, and still prevents usable_treatment.
+    reference_valid = not invalid
+    delivery_complete = complete_counts and received == committed and not counts["pending"] and all(transport.get(k) is False for k in
         ("transport_error_observed", "pending_output_observed", "partial_input_observed"))
     return {"mode": mode, "attribution_verified": True, "reference_valid": reference_valid,
             "delivery_complete": delivery_complete, "usable_treatment": not issues,

@@ -74,6 +74,8 @@ int main(void) {
 
     def test_real_partial_reference_is_not_accepted(self):
         result = self.call(*fixture(self.reports[3], 1, 0))
+        self.assertTrue(result["reference_valid"])
+        self.assertFalse(result["delivery_complete"])
         self.assertFalse(result["usable_treatment"])
         self.assertIn("reference_output_incomplete", result["issues"])
 
