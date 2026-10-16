@@ -42,8 +42,9 @@
  * unframed (see mdm_device_read/write in modem_main.c). There is no header and
  * no rate negotiation — the rate is whatever slmodemd was compiled for.
  *
- * We are that helper. We inherit the AudioSocket TCP connection from the broker
- * through an environment variable, and relay:
+ * We are that helper. slmodemd stays resident, so we cannot inherit the call's
+ * AudioSocket connection; we connect to the broker's Unix socket
+ * (SLMBRIDGE_ASOCK_PATH) and the broker relays it. We relay:
  *
  *     slmodemd ──PCM──▶ [ring] ──20 ms frames──▶ AudioSocket ──▶ Asterisk
  *     slmodemd ◀──PCM──                          AudioSocket ◀── Asterisk
@@ -341,6 +342,12 @@ static void rs_init(resamp_t *r, int L, int M, int taps, double fc_hz,
 {
     if (taps < 4) taps = 4;
     if (taps > RS_TAPS_MAX) taps = RS_TAPS_MAX;
+    /* h[] holds RS_TAPS_MAX * RS_MAX_L floats. L comes from the configured DSP
+       rate, so clamp it here as well as validating the rate at the caller:
+       DSP_RATE=48000 used to make L 30 and write 2880 floats into 768. */
+    if (L < 1) L = 1;
+    if (L > RS_MAX_L) L = RS_MAX_L;
+    if (M < 1) M = 1;
     r->L = L; r->M = M; r->taps = taps; r->phase = 0; r->hpos = 0;
     memset(r->hist, 0, sizeof r->hist);
     memset(r->h, 0, sizeof r->h);
@@ -369,6 +376,13 @@ static void rs_init(resamp_t *r, int L, int M, int taps, double fc_hz,
         sum += r->h[i];
     }
     for (int i = 0; i < n; i++) r->h[i] = (float)(r->h[i] * (double)L / sum);
+}
+
+/* The resampler is a fixed 6:5 design (rs_init's intermediate rate is
+   8000 * 6), so 9600 is the only rate it can serve; 8000 bypasses it. */
+static int dsp_rate_supported(int rate)
+{
+    return rate == AS_RATE || rate == 9600;
 }
 
 /* Pick the pair of designs. See the block comment: UP and DOWN have different
@@ -593,7 +607,12 @@ static int helper_main(int pcm_fd, int as_fd)
        the rig. Until a real call settles it, the default must be the rate that
        is known to carry subscribers. */
     const char *dr = bridge_env("DSP_RATE");
-    const int dsp_rate = (dr && *dr) ? atoi(dr) : AS_RATE;
+    int dsp_rate = (dr && *dr) ? atoi(dr) : AS_RATE;
+    if (!dsp_rate_supported(dsp_rate)) {
+        fprintf(stderr, "slmbridge helper: DSP_RATE=%s is not supported (8000 or 9600); "
+                        "using 8000\n", dr);
+        dsp_rate = AS_RATE;
+    }
     const int resampling = (dsp_rate != AS_RATE);
     /* after dsp_rate: the resampled path gets a larger ring. See ring_frames_for(). */
     const size_t ring_cap = (size_t)ring_frames_for(dsp_rate) * FRAME_SAMPLES;
@@ -704,8 +723,8 @@ static int helper_main(int pcm_fd, int as_fd)
         int pr = poll(pfd, 2, (int)wait_ms);
 
         if (pr > 0) {
-            if (pfd[0].revents & (POLLERR | POLLHUP)) { why = "POLLERR/POLLHUP on broker socket"; break; }
-            if (pfd[1].revents & (POLLERR | POLLHUP)) { why = "POLLERR/POLLHUP on slmodemd socketpair"; break; }
+            if (pfd[0].revents & (POLLERR | POLLHUP | POLLNVAL)) { why = "POLLERR/POLLHUP on broker socket"; break; }
+            if (pfd[1].revents & (POLLERR | POLLHUP | POLLNVAL)) { why = "POLLERR/POLLHUP on slmodemd socketpair"; break; }
 
             /* Asterisk -> slmodemd, straight through: slmodemd's reads are what
                pace its DSP, so this direction must not be re-timed. */
@@ -990,9 +1009,22 @@ static char  tx_rate[32];
  * ---------------------------------------------------------------------- */
 static char session_path[128];
 
+/* SESSION_IP becomes a file name under /run/litenet/sessions, written as
+   root: refuse anything that could name a different directory. */
+static int session_name_ok(const char *ip)
+{
+    if (!ip || !*ip || strlen(ip) > 64) return 0;
+    if (!strcmp(ip, ".") || !strcmp(ip, "..")) return 0;
+    return strchr(ip, '/') == NULL;
+}
+
 static void session_file_write(const char *rate)
 {
     const char *ip = bridge_env("SESSION_IP");
+    if (ip && *ip && !session_name_ok(ip)) {
+        fprintf(stderr, "slmbridge: refusing session file name [%s]\n", ip);
+        return;
+    }
     if (!ip || !*ip || !rate || !*rate) {
         fprintf(stderr, "slmbridge: no session file -- ip=[%s] rate=[%s]\n",
                 ip ? ip : "(unset)", rate ? rate : "(null)");
@@ -1134,8 +1166,18 @@ static int relay_and_watch(int a, int b, int *tfdp)
             }
         }
 
-        if (tfd >= 0 && (p[2].revents & POLLIN)) {
+        if (tfd >= 0 && (p[2].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL))) {
             ssize_t r = read(tfd, buf, sizeof buf);
+            if (r == 0 || (r < 0 && errno != EAGAIN && errno != EINTR)) {
+                /* The pty went away (slmodemd exited): EOF or EIO. Polling it
+                   again returns at once, forever, and used to spin this loop
+                   at full CPU for the rest of the call. Stop watching it; the
+                   end-of-call ATH re-opens the tty. */
+                fprintf(stderr, "slmbridge: modem tty hung up; no longer watching it\n");
+                close(tfd);
+                *tfdp = tfd = -1;
+                r = 0;
+            }
             for (ssize_t i = 0; i < r; i++) {
                 char c = (char)buf[i];
                 if (c == '\r' || c == '\n') {
@@ -1198,6 +1240,18 @@ static int broker_main(int port, const char *unix_path, const char *tty)
     if (answer_length < 0) {
         fprintf(stderr, "slmbridge: invalid AT_CMD: command plus CR does not fit answer buffer\n");
         return 1;
+    }
+
+    /* A broker killed mid-call never reached session_file_clear(), and a
+       leaked file hands the next subscriber on that address the old rate. */
+    {
+        const char *ip = bridge_env("SESSION_IP");
+        if (session_name_ok(ip)) {
+            char stale[128];
+            snprintf(stale, sizeof stale, "/run/litenet/sessions/%s", ip);
+            if (unlink(stale) == 0)
+                fprintf(stderr, "slmbridge: removed stale session file %s\n", stale);
+        }
     }
 
     setenv("SLMBRIDGE_TTY", tty, 1);
@@ -1279,6 +1333,19 @@ static int broker_main(int port, const char *unix_path, const char *tty)
            ATW2 = CONNECT reports the line rate, not the 115200 serial rate. */
         /* One write, no sleeps. Anything slower than this races the 2000 ms
            AudioSocket liveness timeout. */
+        /* Anything already queued on the helper socket predates this call's
+           ATA -- a helper that connected after the previous call's 8 s wait
+           gave up, or any local process (the socket is 0666). Accepting it
+           below would pair this caller with the wrong peer, so drop it. */
+        for (;;) {
+            struct pollfd sp = { .fd = us, .events = POLLIN };
+            if (poll(&sp, 1, 0) <= 0 || !(sp.revents & POLLIN)) break;
+            int stale = accept(us, NULL, NULL);
+            if (stale < 0) break;
+            fprintf(stderr, "slmbridge: dropped a helper connection queued before this call\n");
+            close(stale);
+        }
+
         int t = open(tty, O_RDWR | O_NOCTTY | O_NONBLOCK);
         if (t >= 0) {
             ssize_t w = write(t, answer_command, (size_t)answer_length); (void)w;
@@ -1297,6 +1364,12 @@ static int broker_main(int port, const char *unix_path, const char *tty)
             continue;
         }
         int h_fd = accept(us, NULL, NULL);
+        if (h_fd < 0) {
+            fprintf(stderr, "slmbridge: accepting the helper failed: %s\n", strerror(errno));
+            close(as_fd);
+            if (t >= 0) { ssize_t w = write(t, "ATH\r", 4); (void)w; close(t); }
+            continue;
+        }
         fprintf(stderr, "slmbridge: helper attached, relaying\n");
         relay_and_watch(as_fd, h_fd, &t);
         fprintf(stderr, "slmbridge: call ended\n");

@@ -77,25 +77,33 @@ It also fixes two problems that sit underneath that one:
 
 `slmbridge` is two small processes, not one:
 
-- **The broker** listens for AudioSocket connections from Asterisk and forks
-  a `slmodemd` instance per call.
-- **The helper** is what `slmodemd` execs as its `--exec` answer-side helper.
-  It inherits the AudioSocket connection from the broker and relays raw PCM
-  between `slmodemd`'s socketpair and AudioSocket's 20 ms framing, resampling
-  as it goes.
+- **The broker** (`slmbridge --broker [port] [tty]`, default `9095` and
+  `/dev/ttySL0`) listens for AudioSocket connections from Asterisk on
+  `127.0.0.1:<port>`, answers the already-running `slmodemd` by writing
+  `SLMBRIDGE_AT_CMD` to its pty, and relays the call to the helper. It serves
+  one call at a time and refuses a second connection while busy.
+- **The helper** is what the resident `slmodemd` execs as its `-e` helper when
+  the modem goes off-hook. It connects to the broker's Unix socket
+  (`SLMBRIDGE_ASOCK_PATH`) and relays raw PCM between `slmodemd`'s socketpair
+  and AudioSocket's 20 ms framing, resampling as it goes.
 
 ```
-Asterisk ──AudioSocket (TCP)──▶ broker ──forks──▶ slmodemd
-                                   │                  │
-                                   └──inherited fd──▶ helper (this binary)
-                                                       │
-                                          raw PCM over socketpair
+Asterisk ──AudioSocket (TCP, loopback)──▶ broker ──AT commands (pty)──▶ slmodemd (resident)
+                                            ▲                              │ forks/execs
+                                            └──Unix socket──── helper (this binary)
+                                                                 │
+                                                    raw PCM over socketpair
 ```
 
-Because `slmodemd` hardcodes device 0 internally, running more than one
-instance needs each one told apart — `slmbridge` handles the multi-line
-bookkeeping so a pool of lines can run concurrently on one host without
-fighting over the same device node.
+One broker serves one line. To run several lines, run one `slmodemd` and one
+broker per line, each with its own port, pty, `SLMBRIDGE_ASOCK_PATH` and
+session IP; that per-line configuration lives in your service files, not in
+`slmbridge`.
+
+The helper socket is created mode `0666` because `slmodemd` drops privileges
+before it execs the helper. Any local user can therefore connect to it while
+a call is being set up; put it in a directory only the modem user can reach
+if other users share the host.
 
 ## Both carriers of a V.34 call
 
@@ -139,14 +147,14 @@ Everything `slmbridge` reads. Unset means the default in the right-hand column.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `SLMBRIDGE_ASOCK_PATH` | — | AudioSocket listen path, broker mode |
-| `SLMBRIDGE_TTY` | — | the pty `slmodemd` created, handed to `pppd` at `CONNECT` |
+| `SLMBRIDGE_ASOCK_PATH` | `/run/litenet/slm0.sock` | the Unix socket the broker listens on and the helper connects to |
+| `SLMBRIDGE_TTY` | set by the broker | the pty `slmodemd` created (the broker's third argument), handed to `pppd` at `CONNECT` |
 | `SLMBRIDGE_PPPD` | — | `pppd` arguments; unset means do not start `pppd` |
 | `SLMBRIDGE_NETNS` | — | network namespace to run `pppd` in |
-| `SLMBRIDGE_SESSION_IP` | — | names the session file; unset means write none |
+| `SLMBRIDGE_SESSION_IP` | — | names the session file `/run/litenet/sessions/<value>`, written when `pppd` starts; unset means write none |
 | `SLMBRIDGE_AT_INIT` | `ATZ;ATX4;AT+MS=132,1,1200,14400;AT+MS?` | sent once at startup, `;`-separated |
 | `SLMBRIDGE_AT_CMD` | `ATA` | sent per call to answer; at most 62 bytes before the added CR |
-| `SLMBRIDGE_DSP_RATE` | `8000` | the DSP's sample rate. Resamples only when this is not 8000 |
+| `SLMBRIDGE_DSP_RATE` | `8000` | the DSP's sample rate: `8000` (no resampler) or `9600` (6:5 resampler). Anything else is logged and treated as 8000 |
 | `SLMBRIDGE_TX_CLOCK` | unset: timer pacing | `rx` paces transmit off the receive clock |
 | `SLMBRIDGE_RX_PREFILL` | `2` | initial buffered frames when `TX_CLOCK=rx` |
 | `SLMBRIDGE_RING_FRAMES` | 16, or 64 when resampling | ring size in 20 ms frames |
@@ -177,6 +185,11 @@ NUL in place of CR at the boundary or pass an out-of-bounds length to `write()`.
 The default `ATA`, empty configuration and commands through 62 bytes retain their
 existing behavior. This guard does not validate AT syntax or repair short writes.
 
+`make check` also runs `tests/fuzz_helper.c`, which drives the shipping
+helper loop with random, maximum-length, zero-length and odd-length
+AudioSocket frames and odd-sized PCM bursts (`make fuzz` for a longer run;
+build with `-fsanitize=address,undefined` to make it useful).
+
 `make check` exercises the shipping formatter for every length from 0 through
 4096, including exact CR/NUL placement and surrounding memory canaries, alongside
 the resampler checks. The guard was additionally exercised through inert broker
@@ -193,7 +206,7 @@ make check    # tests the answer-command formatter and resampler
 
 Requires a C compiler and `pthread`/`libm`. No other dependencies — this
 binary does no DSP of its own and links against nothing GPL or proprietary;
-it talks to `slmodemd` as a subprocess over a pipe, not as a library.
+it talks to `slmodemd` over a pty and a socketpair, not as a library.
 
 You'll separately need a working `slmodemd` build (from Smart Link's
 `sl-modem-daemon` sources) and a SIP/Asterisk setup that exposes calls to it
@@ -245,7 +258,7 @@ gap between them, and none of this works without their prior art:
 |---|---|---|
 | `slmodemd` | Smart Link Ltd (Debian `sl-modem-daemon` packaging) | BSD-3-Clause (packaging); DSP itself is Smart Link's proprietary blob |
 | [D-Modem](https://github.com/strozfriedberg/d-modem) | Stroz Friedberg / Aon plc | GPL-2.0 |
-| [AudioSocket](https://github.com/CyCoreSystems/audiosocket) | Seán C McCord, CyCore Systems | GPL-2.0 |
+| [AudioSocket](https://github.com/CyCoreSystems/audiosocket) | Seán C McCord, CyCore Systems | Apache-2.0 (the protocol library; Asterisk's `app_audiosocket` is GPL-2.0 with Asterisk) |
 | Asterisk | Sangoma / Digium and the Asterisk project | GPL-2.0 |
 
 `slmbridge` itself was extracted from [LiteNet Connectivity Solutions'](https://dialup.litenet.tel) dial-up

@@ -1,3 +1,4 @@
 slmbridge
 slmbridge_rstest
 *.dSYM/
+fuzz_helper

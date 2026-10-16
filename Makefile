@@ -12,10 +12,21 @@ slmbridge: slmbridge.c
 slmbridge_rstest: slmbridge_rstest.c slmbridge.c
 	$(CC) $(CFLAGS) -Wno-unused-function -o $@ $< $(LDFLAGS)
 
-check: slmbridge_rstest
+# Drives the shipping helper_main() with random, boundary and truncated
+# AudioSocket frames and odd PCM bursts. Most useful under sanitizers:
+#   make clean fuzz CFLAGS='-O1 -g -fsanitize=address,undefined -pthread' \
+#                   LDFLAGS='-fsanitize=address,undefined -pthread -lm'
+fuzz_helper: tests/fuzz_helper.c slmbridge.c
+	$(CC) $(CFLAGS) -Wno-unused-function -o $@ tests/fuzz_helper.c $(LDFLAGS)
+
+fuzz: fuzz_helper
+	./fuzz_helper
+
+check: slmbridge_rstest fuzz_helper
 	./slmbridge_rstest
+	./fuzz_helper 100
 
 clean:
-	rm -f slmbridge slmbridge_rstest
+	rm -f slmbridge slmbridge_rstest fuzz_helper
 
-.PHONY: all check clean
+.PHONY: all check clean fuzz
